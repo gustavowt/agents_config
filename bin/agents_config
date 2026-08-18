@@ -1,0 +1,459 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+#
+# agents_config - install/clean the shared agents store into a tool's global
+# config. Two artifact kinds:
+#   :symlink   - link a shared file/dir into the tool config (read-through)
+#   :generate  - write a tool-specific file with transformed frontmatter
+#
+# Single source of truth: the shared store at ~/agents_config. Canonical agent
+# files live at ~/agents_config/agents/<name>.md and are NEVER edited by this
+# tool. For tools that need a different frontmatter schema (e.g. agy, cursor,
+# codex), this installer generates a derived file in the tool's config dir.
+# Re-run after editing a canonical file to regenerate derived files.
+#
+# Usage:
+#   agents_config <target>           install/repair artifacts for <target>
+#   agents_config <target> --remove  remove artifacts for <target>
+#   agents_config <target> --prune   remove + delete empty leftover dirs
+#   agents_config --all             install/repair for every target
+#   agents_config --all --remove    remove for every target
+#   agents_config --list            list known targets
+#   agents_config --help            show help
+#
+# Targets are registered in TARGETS below. To support a new tool, add an entry.
+
+require "fileutils"
+require "optparse"
+require "yaml"
+
+STORE = File.expand_path("..", __dir__)           # /home/guga/agents_config
+AGENTS_DIR = File.join(STORE, "agents")           # .../agents_config/agents
+RULES_FILE = File.join(STORE, "AGENTS.md")        # .../agents_config/AGENTS.md
+
+# Marker placed as a comment on the first line of generated files so the
+# installer can identify its own output (idempotent regen, safe removal, and
+# clobber-protection for hand-edited files).
+GENERATED_MARKER = "agents_config:generated"
+
+GEMINI_AGENT_MODELS = {
+  "orchestrator"              => "gemini-2.5-pro",
+  "principal"                 => "gemini-2.5-pro",
+  "feature-lead"              => "gemini-2.5-pro",
+  "infra-platform"            => "gemini-2.5-pro",
+  "rails-backend-watchmaker"  => "gemini-2.5-pro",
+  "frontend-vue-watchmaker"   => "gemini-2.5-pro",
+  "image-analyst"             => "gemini-2.5-pro",
+  "redteam"                   => "gemini-2.5-pro",
+
+  "cartographer"              => "gemini-2.5-flash",
+  "sprinter"                  => "gemini-2.5-flash",
+  "watchmaker"                => "gemini-2.5-flash",
+  "rails-backend"             => "gemini-2.5-flash",
+  "frontend-vue"              => "gemini-2.5-flash",
+  "qa-tester"                 => "gemini-2.5-flash",
+  "security-guardian"         => "gemini-2.5-flash",
+  "designer"                  => "gemini-2.5-flash",
+  "docs-writer"               => "gemini-2.5-flash",
+  "duckdb-specialist"         => "gemini-2.5-flash",
+  "ionic-cross-platform"      => "gemini-2.5-flash",
+  "janitor"                   => "gemini-2.5-flash",
+}.freeze
+
+# An Artifact is one thing the installer places in a tool's config dir.
+#   kind:  :symlink | :generate
+#   src:   canonical source (shared file/dir) for :symlink, or the canonical
+#          agent .md whose frontmatter+body is transformed for :generate
+#   dest:  absolute destination path in the tool config
+Artifact = Struct.new(:kind, :src, :dest, :opts) do
+  def symlink?; kind == :symlink; end
+  def generate?; kind == :generate; end
+end
+
+# A target describes how one tool reads the shared store.
+#   config_root: the tool's global config dir (expanded)
+#   build:       lambda(target) -> [Artifact, ...]
+Target = Struct.new(:name, :config_root) do
+  def agents_dest_dir
+    File.join(config_root, "agents")
+  end
+
+  def rules_dest
+    File.join(config_root, "AGENTS.md")
+  end
+end
+
+# Build artifacts for the agy (Antigravity CLI) target.
+# - AGENTS.md is symlinked (no frontmatter; agy reads it as a global rule).
+# - Each agent is GENERATED as a flat agents/<name>.md file with agy frontmatter:
+#     name: <agent-name>
+#     description: <canonical description>
+#     model: <model>
+#     subagent: true (unless primary mode)
+#   opencode-only keys (mode, permission) are dropped. The agent body
+#   (prompt) is copied verbatim from the canonical file.
+def build_gemini(target)
+  arts = []
+  arts << Artifact.new(:symlink, RULES_FILE, target.rules_dest, {}) if File.exist?(RULES_FILE)
+  Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.each do |src|
+    name = File.basename(src, ".md")
+    dest = File.join(target.agents_dest_dir, "#{name}.md")
+    arts << Artifact.new(:generate, src, dest, { name: name, format: :gemini })
+  end
+  arts
+end
+
+# Build artifacts for the opencode target.
+# - Whole shared agents/ dir is one symlink.
+# - AGENTS.md is symlinked.
+def build_opencode(target)
+  arts = []
+  arts << Artifact.new(:symlink, AGENTS_DIR, target.agents_dest_dir, {})
+  arts << Artifact.new(:symlink, RULES_FILE, target.rules_dest, {}) if File.exist?(RULES_FILE)
+  arts
+end
+
+# Build artifacts for the Cursor CLI target.
+# - AGENTS.md is symlinked to ~/.cursor/AGENTS.md.
+# - Each agent is GENERATED as a flat agents/<name>.md file with YAML frontmatter:
+#     name: <agent-name>
+#     description: <canonical description>
+def build_cursor(target)
+  arts = []
+  arts << Artifact.new(:symlink, RULES_FILE, target.rules_dest, {}) if File.exist?(RULES_FILE)
+  Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.each do |src|
+    name = File.basename(src, ".md")
+    dest = File.join(target.agents_dest_dir, "#{name}.md")
+    arts << Artifact.new(:generate, src, dest, { name: name, format: :cursor })
+  end
+  arts
+end
+
+# Build artifacts for the OpenAI Codex CLI target.
+# - AGENTS.md is symlinked to ~/.codex/AGENTS.md.
+# - Each agent is GENERATED as a flat agents/<name>.toml file with TOML fields:
+#     name = "..."
+#     description = "..."
+#     developer_instructions = """..."""
+def build_codex(target)
+  arts = []
+  arts << Artifact.new(:symlink, RULES_FILE, target.rules_dest, {}) if File.exist?(RULES_FILE)
+  Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.each do |src|
+    name = File.basename(src, ".md")
+    dest = File.join(target.agents_dest_dir, "#{name}.toml")
+    arts << Artifact.new(:generate, src, dest, { name: name, format: :codex })
+  end
+  arts
+end
+
+TARGETS = [
+  Target.new("gemini", File.expand_path("~/.gemini/config")),
+  Target.new("opencode", File.expand_path("~/.config/opencode")),
+  Target.new("cursor", File.expand_path("~/.cursor")),
+  Target.new("codex", File.expand_path("~/.codex")),
+].freeze
+
+# Map target name -> build lambda. (Defined after the build_ methods exist.)
+BUILDERS = {
+  "gemini" => method(:build_gemini),
+  "opencode" => method(:build_opencode),
+  "cursor" => method(:build_cursor),
+  "codex" => method(:build_codex),
+}.freeze
+
+# ----- symlink helpers --------------------------------------------------------
+
+# Safe: only delete if it is a symlink whose target lives inside our store.
+def our_symlink?(path)
+  return false unless File.symlink?(path)
+  File.expand_path(File.readlink(path)).start_with?(STORE + "/")
+end
+
+# ----- generated-file helpers -------------------------------------------------
+
+# A file is "ours" (safe to overwrite/delete) if its first line carries the
+# generated marker. A hand-edited file without the marker is never touched.
+def our_generated?(path)
+  return false unless File.file?(path) && !File.symlink?(path)
+  first_line = File.foreach(path).first
+  first_line ? first_line.start_with?("# #{GENERATED_MARKER}") : false
+rescue
+  false
+end
+
+# Parse the canonical agent file's frontmatter and body.
+# Returns [frontmatter_hash, body_string]. Frontmatter is optional; if absent,
+# returns [{}, full_file_content_as_body].
+def parse_agent_file(path)
+  content = File.read(path)
+  if content.start_with?("---\n")
+    end_idx = content.index("\n---\n", 4)
+    raise "Unterminated frontmatter in #{path}" unless end_idx
+    fm = YAML.safe_load(content[4...end_idx], permitted_classes: [Symbol]) || {}
+    fm = {} unless fm.is_a?(Hash)
+    body = content[(end_idx + 5)..]
+    [fm, body]
+  else
+    [{}, content]
+  end
+end
+
+# Transform canonical frontmatter into agy frontmatter.
+# Drops opencode-only keys. Emits name + description + model + subagent.
+def agy_frontmatter(canonical_fm, name)
+  fm = { "name" => name }
+  fm["description"] = canonical_fm["description"] if canonical_fm["description"]
+  fm["model"] = canonical_fm["gemini_model"] || canonical_fm["model"] || GEMINI_AGENT_MODELS[name] || "gemini-2.5-flash"
+  fm["subagent"] = true unless canonical_fm["mode"] == "primary"
+  fm
+end
+
+# Transform canonical frontmatter into cursor frontmatter.
+# Emits name + description.
+def cursor_frontmatter(canonical_fm, name)
+  fm = { "name" => name }
+  fm["description"] = canonical_fm["description"] if canonical_fm["description"]
+  fm
+end
+
+# Escape string for a standard TOML double-quoted basic string.
+def toml_escape_string(str)
+  str.to_s
+     .gsub('\\') { '\\\\' }
+     .gsub('"') { '\"' }
+     .gsub("\b") { '\b' }
+     .gsub("\f") { '\f' }
+     .gsub("\n") { '\n' }
+     .gsub("\r") { '\r' }
+     .gsub("\t") { '\t' }
+     .gsub(/[\x00-\x08\x0b\x0c\x0e-\x1f]/) { |c| sprintf("\\u%04x", c.ord) }
+end
+
+# Escape string for a TOML multiline basic string ("""...""").
+# Backslashes are escaped, triple-quotes are escaped, and any trailing unescaped
+# quotes before the closing delimiter are escaped.
+def toml_escape_multiline_string(str)
+  escaped = str.to_s
+               .gsub('\\') { '\\\\' }
+               .gsub('"""') { '\"\"\"' }
+  escaped = escaped.sub(/(?<!\\)"+\z/) { |m| m.chars.map { |c| "\\#{c}" }.join }
+  escaped
+end
+
+# Render a generated agent file for Gemini (agy): marker comment + frontmatter + body.
+def render_gemini_agent(src, name)
+  canonical_fm, body = parse_agent_file(src)
+  agy_fm = agy_frontmatter(canonical_fm, name)
+  yaml_str = YAML.dump(agy_fm).sub(/\A---\n/, "")
+  <<~FILE
+    # #{GENERATED_MARKER}
+    ---
+    #{yaml_str}---
+    #{body}
+  FILE
+end
+
+# Render a generated agent file for Cursor: marker comment + frontmatter + body.
+def render_cursor_agent(src, name)
+  canonical_fm, body = parse_agent_file(src)
+  cursor_fm = cursor_frontmatter(canonical_fm, name)
+  yaml_str = YAML.dump(cursor_fm).sub(/\A---\n/, "")
+  <<~FILE
+    # #{GENERATED_MARKER}
+    ---
+    #{yaml_str}---
+    #{body}
+  FILE
+end
+
+# Render a generated agent file for Codex: marker comment + TOML fields.
+def render_codex_agent(src, name)
+  canonical_fm, body = parse_agent_file(src)
+  desc = canonical_fm["description"] || ""
+  escaped_name = toml_escape_string(name)
+  escaped_desc = toml_escape_string(desc)
+  escaped_body = toml_escape_multiline_string(body)
+  <<~FILE
+    # #{GENERATED_MARKER}
+    name = "#{escaped_name}"
+    description = "#{escaped_desc}"
+    developer_instructions = """
+    #{escaped_body}"""
+  FILE
+end
+
+# Render a generated agent file by format (:gemini, :cursor, :codex).
+def render_generated_agent(src, name, format_arg = nil, format: nil)
+  fmt = format || format_arg || :gemini
+  case fmt.to_sym
+  when :gemini then render_gemini_agent(src, name)
+  when :cursor then render_cursor_agent(src, name)
+  when :codex  then render_codex_agent(src, name)
+  else
+    raise ArgumentError, "Unknown format: #{fmt}"
+  end
+end
+
+# ----- artifact install / remove ---------------------------------------------
+
+def install_symlink(art)
+  src = File.expand_path(art.src)
+  dest = art.dest
+  if File.exist?(dest) && !File.symlink?(dest)
+    warn "  ! skip #{dest}: real file/dir present, not a symlink"
+    return false
+  end
+  if File.symlink?(dest)
+    cur = File.expand_path(File.readlink(dest))
+    return true if cur == src
+    File.delete(dest)
+  end
+  FileUtils.mkdir_p(File.dirname(dest))
+  File.symlink(src, dest)
+  puts "  + #{dest} -> #{src}"
+  true
+end
+
+def install_generated(art)
+  dest = art.dest
+  # Clobber-protection: a real, non-generated file at dest is left alone.
+  if File.exist?(dest) && !File.symlink?(dest) && !our_generated?(dest)
+    warn "  ! skip #{dest}: real file present (not generated by us); use --remove after backing up"
+    return false
+  end
+  format = art.opts[:format] || :gemini
+  rendered = render_generated_agent(art.src, art.opts[:name], format: format)
+  # Idempotent: if our generated file already matches, do nothing.
+  if our_generated?(dest) && File.read(dest) == rendered
+    return true
+  end
+  # Replace wrong/broken symlink, missing dest, or stale generated content.
+  File.delete(dest) if File.symlink?(dest) || File.exist?(dest)
+  FileUtils.mkdir_p(File.dirname(dest))
+  File.write(dest, rendered)
+  puts "  ~ #{dest} (generated)"
+  true
+end
+
+def remove_symlink(art)
+  return false unless our_symlink?(art.dest)
+  File.delete(art.dest)
+  puts "  - #{art.dest}"
+  true
+end
+
+def remove_generated(art)
+  return false unless our_generated?(art.dest)
+  File.delete(art.dest)
+  puts "  - #{art.dest} (generated)"
+  true
+end
+
+# ----- one-time migration of the old agy layout ------------------------------
+# The previous (wrong) installer created ~/.gemini/config/agents/<name>/agent.md
+# symlinks. agy does not recognize that layout. On gemini install, sweep those
+# old per-agent dirs away so the new flat files can take over. Only removes
+# symlinks pointing into our store and the now-empty dirs that contained them.
+def migrate_old_gemini_layout(target)
+  old_root = target.agents_dest_dir
+  return unless File.directory?(old_root)
+  Dir.glob(File.join(old_root, "*")).each do |entry|
+    next unless File.directory?(entry)
+    # Remove any agent.md symlinks inside that point into our store.
+    leaf = File.join(entry, "agent.md")
+    if File.symlink?(leaf) && our_symlink?(leaf)
+      File.delete(leaf)
+      puts "  - #{leaf} (old layout)"
+    end
+    FileUtils.rmdir(entry) if File.directory?(entry) && Dir.empty?(entry)
+  end
+end
+
+# ----- target operations ------------------------------------------------------
+
+def install_target(target)
+  puts "Install: #{target.name} (#{target.config_root})"
+  FileUtils.mkdir_p(target.config_root)
+  migrate_old_gemini_layout(target) if target.name == "gemini"
+  arts = BUILDERS[target.name].call(target)
+  arts.each do |art|
+    case art.kind
+    when :symlink then install_symlink(art)
+    when :generate then install_generated(art)
+    end
+  end
+end
+
+def remove_target(target, prune: false)
+  puts "Remove: #{target.name}"
+  arts = BUILDERS[target.name].call(target)
+  arts.each do |art|
+    case art.kind
+    when :symlink then remove_symlink(art)
+    when :generate then remove_generated(art)
+    end
+  end
+  # Also clean any leftover old-layout symlinks (gemini migration in reverse).
+  if target.name == "gemini"
+    migrate_old_gemini_layout(target)
+  end
+  return unless prune
+  if File.directory?(target.agents_dest_dir) && Dir.empty?(target.agents_dest_dir) &&
+     target.agents_dest_dir != target.config_root
+    FileUtils.rmdir(target.agents_dest_dir)
+    puts "  - #{target.agents_dest_dir}/ (empty)"
+  end
+end
+
+# ----- CLI --------------------------------------------------------------------
+
+def resolve_target(name)
+  t = TARGETS.find { |x| x.name == name }
+  return t if t
+  warn "unknown target: #{name}"
+  warn "known: #{TARGETS.map(&:name).join(', ')}"
+  exit 1
+end
+
+if __FILE__ == $0
+  options = { action: :install, prune: false }
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: agents_config <target|--all> [--remove] [--prune] | --list | --help"
+    opts.on("--remove", "Remove artifacts for the target(s)") { options[:action] = :remove }
+    opts.on("--prune", "With --remove, also delete empty leftover dirs") { options[:prune] = true }
+    opts.on("--all", "Apply to every known target") { options[:all] = true }
+    opts.on("--list", "List known targets and exit") { options[:action] = :list }
+    opts.on("-h", "--help", "Show this help") { options[:action] = :help }
+  end
+  parser.parse!
+
+  if options[:action] == :help
+    puts parser
+    exit 0
+  end
+  if options[:action] == :list
+    TARGETS.each do |t|
+      puts "#{t.name.ljust(12)} #{t.config_root}"
+    end
+    exit 0
+  end
+
+  targets = if options[:all]
+    TARGETS
+  else
+    name = ARGV.shift
+    if name.nil?
+      warn "missing target (use a target name or --all). See --help."
+      exit 1
+    end
+    [resolve_target(name)]
+  end
+
+  targets.each do |t|
+    if options[:action] == :remove
+      remove_target(t, prune: options[:prune])
+    else
+      install_target(t)
+    end
+  end
+end
