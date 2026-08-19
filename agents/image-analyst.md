@@ -1,4 +1,5 @@
 ---
+name: image-analyst
 description: "Image analysis specialist that reads, interprets, and describes images — screenshots, diagrams, mockups, charts, error captures, and visual artifacts."
 mode: subagent
 permission:

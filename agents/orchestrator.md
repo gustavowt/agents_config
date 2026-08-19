@@ -1,4 +1,5 @@
 ---
+name: orchestrator
 description: "Lead agent that decomposes work, delegates to specialist agents, runs independent tasks in parallel, and synthesizes results."
 mode: primary
 permission:

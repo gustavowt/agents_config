@@ -1,4 +1,5 @@
 ---
+name: qa-tester
 description: "QA and test-focused engineer for automated coverage, regression tests, and manual verification checklists."
 mode: subagent
 ---

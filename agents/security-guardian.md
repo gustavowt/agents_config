@@ -1,4 +1,5 @@
 ---
+name: security-guardian
 description: "Security-focused engineer for auth, authorization, file handling, secrets, input validation, and data exposure risks."
 mode: subagent
 ---

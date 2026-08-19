@@ -1,4 +1,5 @@
 ---
+name: docs-writer
 description: "Technical documentation engineer for READMEs, runbooks, setup docs, architecture notes, and developer-facing guides."
 mode: subagent
 ---

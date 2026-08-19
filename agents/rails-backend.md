@@ -1,4 +1,5 @@
 ---
+name: rails-backend
 description: "Ruby on Rails backend specialist focused on idiomatic Rails, PostgreSQL, APIs, jobs, migrations, and tests."
 mode: subagent
 ---

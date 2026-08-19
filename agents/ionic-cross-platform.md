@@ -1,4 +1,5 @@
 ---
+name: ionic-cross-platform
 description: "Ionic + Electron specialist for desktop apps built with Ionic Framework, Electron main/preload/renderer architecture, native desktop integration, packaging, and polished app UX."
 mode: subagent
 ---

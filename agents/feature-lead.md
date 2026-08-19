@@ -1,4 +1,5 @@
 ---
+name: feature-lead
 description: "Intermediate lead that takes a single feature and decomposes it across backend, frontend, and test specialists end to end."
 mode: subagent
 permission:

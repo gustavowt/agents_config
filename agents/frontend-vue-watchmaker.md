@@ -1,4 +1,5 @@
 ---
+name: frontend-vue-watchmaker
 description: "Reviews frontend-vue agent changes for conformity to Client Vue conventions."
 mode: subagent
 ---

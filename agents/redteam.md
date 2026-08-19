@@ -1,4 +1,5 @@
 ---
+name: redteam
 description: "Skeptical senior reviewer focused on bugs, unsafe assumptions, missing tests, and maintainability traps."
 mode: subagent
 permission:

@@ -1,4 +1,5 @@
 ---
+name: duckdb-specialist
 description: "DuckDB specialist for lean schema design, SQL, indexing, data modeling, performance, and DuckDB-WASM usage in Ionic/Electron mobile and desktop apps."
 mode: subagent
 ---

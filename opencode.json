@@ -1,0 +1,111 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": true,
+  "default_agent": "orchestrator",
+  "permission": "allow",
+  "agent": {
+    "explore": {
+      "disable": true
+    },
+    "build": {
+      "disable": true
+    },
+    "plan": {
+      "model": "ollama/kimi-k3:cloud"
+    },
+    "cartographer": {
+      "model": "ollama/deepseek-v4-flash:0731-cloud"
+    },
+    "designer": {
+      "model": "ollama/deepseek-v4-flash:0731-cloud"
+    },
+    "docs-writer": {
+      "model": "ollama/deepseek-v4-flash:0731-cloud"
+    },
+    "duckdb-specialist": {
+      "model": "ollama/deepseek-v4-flash:0731-cloud"
+    },
+    "feature-lead": {
+      "model": "ollama/glm-5.2:cloud"
+    },
+    "frontend-vue": {
+      "model": "ollama/deepseek-v4-flash:0731-cloud"
+    },
+    "infra-platform": {
+      "model": "ollama/kimi-k3:cloud"
+    },
+    "ionic-cross-platform": {
+      "model": "ollama/glm-5.2:cloud"
+    },
+    "janitor": {
+      "model": "ollama/kimi-k3:cloud"
+    },
+    "orchestrator": {
+      "model": "ollama/glm-5.2:cloud"
+    },
+    "principal": {
+      "model": "ollama/kimi-k3:cloud"
+    },
+    "qa-tester": {
+      "model": "ollama/glm-5.2:cloud"
+    },
+    "rails-backend": {
+      "model": "ollama/deepseek-v4-flash:0731-cloud"
+    },
+    "rails-backend-watchmaker": {
+      "model": "ollama/kimi-k3:cloud"
+    },
+    "redteam": {
+      "model": "ollama/deepseek-v4-flash:0731-cloud"
+    },
+    "security-guardian": {
+      "model": "ollama/deepseek-v4-flash:0731-cloud"
+    },
+    "sprinter": {
+      "model": "ollama/deepseek-v4-flash:0731-cloud"
+    },
+    "watchmaker": {
+      "model": "ollama/deepseek-v4-flash:0731-cloud"
+    },
+    "frontend-vue-watchmaker": {
+      "model": "ollama/kimi-k3:cloud"
+    },
+    "image-analyst": {
+      "model": "ollama/kimi-k3:cloud"
+    }
+  },
+  "plugin": [
+    "opencode-browser"
+  ],
+  "mcp": {
+    "browsermcp": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@browsermcp/mcp@0.1.3"
+      ],
+      "enabled": true
+    }
+  },
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama",
+      "options": {
+        "baseURL": "http://localhost:11434/v1"
+      },
+      "models": {
+        "kimi-k3:cloud": {
+          "name": "kimi-k3"
+        },
+        "glm-5.2:cloud": {
+          "name": "glm-5.2"
+        },
+        "deepseek-v4-flash:0731-cloud": {
+          "name": "deepseek-v4-flash"
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,5 @@
 ---
+name: infra-platform
 description: "Platform engineer for Docker, CI, local development, deployment, observability, and reliability."
 mode: subagent
 ---

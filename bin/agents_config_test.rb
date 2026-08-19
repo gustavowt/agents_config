@@ -8,6 +8,8 @@
 
 require "tmpdir"
 require "fileutils"
+require "json"
+require "open3"
 require "yaml"
 require "minitest/autorun"
 
@@ -22,6 +24,7 @@ class AgentsConfigTest < Minitest::Test
     FileUtils.mkdir_p(File.join(@home, ".config", "opencode"))
     FileUtils.mkdir_p(File.join(@home, ".cursor"))
     FileUtils.mkdir_p(File.join(@home, ".codex"))
+    FileUtils.mkdir_p(File.join(@home, ".pi", "agent"))
   end
 
   def teardown
@@ -33,9 +36,16 @@ class AgentsConfigTest < Minitest::Test
     [out, $?.success?]
   end
 
+  def run_cli_at(script, home, *args)
+    stdout, stderr, status = Open3.capture3({ "HOME" => home }, "ruby", script, *args)
+    [stdout + stderr, status.success?]
+  end
+
   def parse_frontmatter(file_path)
     content = File.read(file_path)
     if content =~ /\A# agents_config:generated\n---\n(.*?)\n---\n/m
+      YAML.safe_load($1) || {}
+    elsif content =~ /\A---\n(.*?)\n---\n# agents_config:generated\n/m
       YAML.safe_load($1) || {}
     else
       {}
@@ -65,6 +75,8 @@ class AgentsConfigTest < Minitest::Test
     assert_includes out, "opencode"
     assert_includes out, "cursor"
     assert_includes out, "codex"
+    assert_includes out, "pi"
+    assert_includes out, File.join(@home, ".pi", "agent")
   end
 
   def test_gemini_install_creates_flat_generated_files_with_correct_models
@@ -289,6 +301,141 @@ class AgentsConfigTest < Minitest::Test
     assert File.exist?(rules)
   end
 
+  def test_pi_install_generates_frontmatter_first_agents_with_opencode_models
+    out, ok = run_cli("pi")
+    assert ok, out
+    agents_dir = File.join(@home, ".pi", "agent", "agents")
+    assert File.directory?(agents_dir)
+    refute File.symlink?(agents_dir)
+    assert_equal "# #{GENERATED_MARKER}\n", File.read(File.join(agents_dir, PI_AGENTS_DIR_MARKER))
+    rules = File.join(@home, ".pi", "agent", "AGENTS.md")
+    assert File.symlink?(rules)
+    assert File.exist?(rules)
+    assert_equal File.join(STORE, "AGENTS.md"), File.expand_path(File.readlink(rules))
+    pi_models = JSON.parse(File.read(File.join(@home, ".pi", "agent", "models.json")))
+    ollama = pi_models.fetch("providers").fetch("ollama")
+    assert_equal "http://localhost:11434/v1", ollama.fetch("baseUrl")
+    assert_equal "openai-completions", ollama.fetch("api")
+    assert_equal "ollama", ollama.fetch("apiKey")
+    assert_equal %w[deepseek-v4-flash:0731-cloud glm-5.2:cloud kimi-k3:cloud],
+                 ollama.fetch("models").map { |model| model.fetch("id") }.sort
+    assert File.file?(File.join(@home, ".pi", "agent", PI_MODELS_MARKER))
+    expected_models = JSON.parse(File.read(File.join(STORE, "opencode.json"))).fetch("agent")
+    Dir.glob(File.join(agents_dir, "*.md")).sort.each do |agent_path|
+      content = File.read(agent_path)
+      assert content.start_with?("---\n"), "Pi must see frontmatter first in #{agent_path}"
+      frontmatter = parse_frontmatter(agent_path)
+      name = File.basename(agent_path, ".md")
+      assert_equal name, frontmatter["name"]
+      assert_equal expected_models.fetch(name).fetch("model"), frontmatter["model"]
+      assert_includes content, "# #{GENERATED_MARKER}\n"
+    end
+  end
+
+  def test_pi_remove_and_prune
+    run_cli("pi")
+    root = File.join(@home, ".pi", "agent")
+    assert File.directory?(File.join(root, "agents"))
+    assert File.symlink?(File.join(root, "AGENTS.md"))
+
+    out, ok = run_cli("pi", "--remove", "--prune")
+    assert ok, out
+    refute File.exist?(File.join(root, "agents"))
+    refute File.exist?(File.join(root, "AGENTS.md"))
+    assert File.exist?(root)
+  end
+
+  def test_install_preserves_foreign_valid_agents_dir_symlink
+    foreign_dir = File.join(@home, "foreign_agents")
+    FileUtils.mkdir_p(foreign_dir)
+    dest = File.join(@home, ".pi", "agent", "agents")
+    File.symlink(foreign_dir, dest)
+
+    out, ok = run_cli("pi")
+    assert ok, out
+    assert_includes out, "foreign symlink present, not managed by us"
+    assert File.symlink?(dest)
+    assert_equal foreign_dir, File.expand_path(File.readlink(dest))
+  end
+
+  def test_pi_install_preserves_foreign_real_agents_dir
+    dest = File.join(@home, ".pi", "agent", "agents")
+    FileUtils.mkdir_p(dest)
+    foreign = File.join(dest, "custom.md")
+    File.write(foreign, "do not touch")
+
+    out, ok = run_cli("pi")
+    assert ok, out
+    assert_includes out, "real directory present, not managed by us"
+    assert_equal "do not touch", File.read(foreign)
+    refute File.exist?(File.join(dest, PI_AGENTS_DIR_MARKER))
+  end
+
+  def test_pi_invalid_or_missing_model_config_fails_before_legacy_link_is_replaced
+    invalid_config = File.join(@home, "invalid-opencode.json")
+    File.write(invalid_config, JSON.dump("agent" => { "sprinter" => {} }))
+    legacy_dir = File.join(@home, ".pi", "agent", "agents")
+    File.symlink(AGENTS_DIR, legacy_dir)
+
+    error = assert_raises(RuntimeError) { pi_agent_models(invalid_config) }
+    assert_match(/agent\.cartographer\.model/, error.message)
+    assert File.symlink?(legacy_dir)
+    assert_equal AGENTS_DIR, File.expand_path(File.readlink(legacy_dir))
+
+    assert_raises(Errno::ENOENT) { pi_agent_models(File.join(@home, "missing-opencode.json")) }
+    assert File.symlink?(legacy_dir)
+    assert_equal AGENTS_DIR, File.expand_path(File.readlink(legacy_dir))
+  end
+
+  def test_pi_cli_invalid_model_config_creates_no_target_paths
+    cases = {
+      "invalid" => "{ not json",
+      "incomplete" => JSON.dump("agent" => { "sprinter" => {} }),
+      "missing" => nil,
+    }
+
+    cases.each do |label, config|
+      sandbox = Dir.mktmpdir("agents_config_#{label}")
+      repo = File.join(sandbox, "repo")
+      home = File.join(sandbox, "home")
+      FileUtils.cp_r(STORE, repo)
+      config_path = File.join(repo, "opencode.json")
+      config.nil? ? File.delete(config_path) : File.write(config_path, config)
+
+      out, ok = run_cli_at(File.join(repo, "bin", "agents_config"), home, "pi")
+      refute ok, "#{label} config unexpectedly succeeded: #{out}"
+      refute File.exist?(File.join(home, ".pi")), "#{label} config created ~/.pi"
+      refute File.exist?(File.join(home, ".pi", "agent")), "#{label} config created Pi root"
+      refute File.exist?(File.join(home, ".pi", "agent", "agents")), "#{label} config created Pi agents"
+      refute File.exist?(File.join(home, ".pi", "agent", "AGENTS.md")), "#{label} config created Pi rules"
+    ensure
+      FileUtils.rm_rf(sandbox) if sandbox
+    end
+  end
+
+  def test_pi_migrates_installer_owned_legacy_agents_symlink
+    legacy_dir = File.join(@home, ".pi", "agent", "agents")
+    File.symlink(AGENTS_DIR, legacy_dir)
+
+    out, ok = run_cli("pi")
+    assert ok, out
+    assert_includes out, "old Pi layout"
+    assert File.directory?(legacy_dir)
+    refute File.symlink?(legacy_dir)
+    assert File.file?(File.join(legacy_dir, "sprinter.md"))
+  end
+
+  def test_install_preserves_foreign_broken_agents_dir_symlink
+    dest = File.join(@home, ".pi", "agent", "agents")
+    File.symlink("/nonexistent/foreign_agents", dest)
+
+    out, ok = run_cli("pi")
+    assert ok, out
+    assert_includes out, "foreign symlink present, not managed by us"
+    assert File.symlink?(dest)
+    assert_equal "/nonexistent/foreign_agents", File.readlink(dest)
+  end
+
   def test_install_is_idempotent
     run_cli("gemini")
     out2, ok = run_cli("gemini") # second run
@@ -487,6 +634,8 @@ class AgentsConfigTest < Minitest::Test
     assert File.exist?(File.join(@home, ".cursor", "AGENTS.md"))
     assert File.exist?(File.join(@home, ".codex", "agents", "sprinter.toml"))
     assert File.exist?(File.join(@home, ".codex", "AGENTS.md"))
+    assert File.exist?(File.join(@home, ".pi", "agent", "agents"))
+    assert File.exist?(File.join(@home, ".pi", "agent", "AGENTS.md"))
   end
 
   def test_all_removes_every_target
@@ -497,5 +646,8 @@ class AgentsConfigTest < Minitest::Test
     refute File.exist?(File.join(@home, ".config", "opencode", "agents"))
     refute File.exist?(File.join(@home, ".cursor", "agents"))
     refute File.exist?(File.join(@home, ".codex", "agents"))
+    refute File.exist?(File.join(@home, ".pi", "agent", "agents"))
+    refute File.exist?(File.join(@home, ".pi", "agent", "AGENTS.md"))
+    assert File.exist?(File.join(@home, ".pi", "agent"))
   end
 end

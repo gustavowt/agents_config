@@ -1,4 +1,5 @@
 ---
+name: janitor
 description: "Refactoring and cleanup engineer focused on simplifying code without changing behavior."
 mode: subagent
 ---

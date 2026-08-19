@@ -1,4 +1,5 @@
 ---
+name: principal
 description: "Staff/principal-level engineer for architecture, system design, tradeoffs, and safe implementation plans."
 mode: subagent
 ---

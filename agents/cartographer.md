@@ -1,4 +1,5 @@
 ---
+name: cartographer
 description: "The designated codebase exploration agent — maps relevant files, flows, conventions, and likely change points with line-numbered precision before planning and implementation."
 mode: subagent
 permission:

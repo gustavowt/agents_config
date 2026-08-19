@@ -1,4 +1,5 @@
 ---
+name: rails-backend-watchmaker
 description: "Reviews rails-backend agent changes for conformity to the rails-backend agent rules, plus HIPAA/PHI safety, code leanness, test economy, and database health."
 mode: subagent
 ---

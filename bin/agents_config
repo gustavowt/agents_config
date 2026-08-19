@@ -24,17 +24,20 @@
 # Targets are registered in TARGETS below. To support a new tool, add an entry.
 
 require "fileutils"
+require "json"
 require "optparse"
 require "yaml"
 
 STORE = File.expand_path("..", __dir__)           # /home/guga/agents_config
 AGENTS_DIR = File.join(STORE, "agents")           # .../agents_config/agents
 RULES_FILE = File.join(STORE, "AGENTS.md")        # .../agents_config/AGENTS.md
+OPENCODE_CONFIG = File.join(STORE, "opencode.json")
 
-# Marker placed as a comment on the first line of generated files so the
-# installer can identify its own output (idempotent regen, safe removal, and
-# clobber-protection for hand-edited files).
+# Marker comment used to identify generated output (idempotent regeneration,
+# safe removal, and clobber protection). Pi places it after frontmatter.
 GENERATED_MARKER = "agents_config:generated"
+PI_AGENTS_DIR_MARKER = ".agents_config_generated"
+PI_MODELS_MARKER = ".models_config_generated"
 
 GEMINI_AGENT_MODELS = {
   "orchestrator"              => "gemini-2.5-pro",
@@ -81,6 +84,10 @@ Target = Struct.new(:name, :config_root) do
   def rules_dest
     File.join(config_root, "AGENTS.md")
   end
+
+  def models_dest
+    File.join(config_root, "models.json")
+  end
 end
 
 # Build artifacts for the agy (Antigravity CLI) target.
@@ -110,6 +117,25 @@ def build_opencode(target)
   arts = []
   arts << Artifact.new(:symlink, AGENTS_DIR, target.agents_dest_dir, {})
   arts << Artifact.new(:symlink, RULES_FILE, target.rules_dest, {}) if File.exist?(RULES_FILE)
+  arts
+end
+
+# Build artifacts for the Pi CLI target.
+# - Pi reads global instructions from ~/.pi/agent/AGENTS.md.
+# - The pi-sub-agent extension discovers agents from ~/.pi/agent/agents/*.md.
+# AGENTS.md remains a direct symlink. Agents are generated because Pi needs a
+# Pi-compatible model value sourced from the checked-in OpenCode configuration.
+def build_pi(target)
+  models = pi_agent_models
+  ollama = pi_ollama_models(models)
+  arts = []
+  arts << Artifact.new(:symlink, RULES_FILE, target.rules_dest, {}) if File.exist?(RULES_FILE)
+  arts << Artifact.new(:pi_models, OPENCODE_CONFIG, target.models_dest, { ollama: ollama })
+  Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.each do |src|
+    name = File.basename(src, ".md")
+    arts << Artifact.new(:generate, src, File.join(target.agents_dest_dir, "#{name}.md"),
+                         { name: name, format: :pi, model: models.fetch(name) })
+  end
   arts
 end
 
@@ -151,6 +177,7 @@ TARGETS = [
   Target.new("opencode", File.expand_path("~/.config/opencode")),
   Target.new("cursor", File.expand_path("~/.cursor")),
   Target.new("codex", File.expand_path("~/.codex")),
+  Target.new("pi", File.expand_path("~/.pi/agent")),
 ].freeze
 
 # Map target name -> build lambda. (Defined after the build_ methods exist.)
@@ -159,6 +186,7 @@ BUILDERS = {
   "opencode" => method(:build_opencode),
   "cursor" => method(:build_cursor),
   "codex" => method(:build_codex),
+  "pi" => method(:build_pi),
 }.freeze
 
 # ----- symlink helpers --------------------------------------------------------
@@ -175,10 +203,53 @@ end
 # generated marker. A hand-edited file without the marker is never touched.
 def our_generated?(path)
   return false unless File.file?(path) && !File.symlink?(path)
-  first_line = File.foreach(path).first
-  first_line ? first_line.start_with?("# #{GENERATED_MARKER}") : false
+  content = File.read(path)
+  content.start_with?("# #{GENERATED_MARKER}") ||
+    content.match?(%r{\A---\n.*?\n---\n# #{Regexp.escape(GENERATED_MARKER)}\n}m)
 rescue
   false
+end
+
+# Pi model assignments deliberately come only from the repository's OpenCode
+# configuration. Every canonical agent must have a non-empty string model.
+def pi_agent_models(config_path = OPENCODE_CONFIG)
+  config = JSON.parse(File.read(config_path))
+  agents = config["agent"]
+  raise "Invalid OpenCode config #{config_path}: expected an agent object" unless agents.is_a?(Hash)
+
+  Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.to_h do |src|
+    name = File.basename(src, ".md")
+    model = agents.dig(name, "model")
+    unless model.is_a?(String) && !model.strip.empty?
+      raise "Invalid OpenCode config #{config_path}: agent.#{name}.model must be a non-empty string"
+    end
+    [name, model]
+  end
+rescue JSON::ParserError => e
+  raise "Invalid OpenCode config #{config_path}: #{e.message}"
+end
+
+# Pi's models.json is derived from the OpenCode Ollama provider, but contains
+# only the endpoint and model catalog Pi needs—never OpenCode tools or policy.
+def pi_ollama_models(agent_models, config_path = OPENCODE_CONFIG)
+  config = JSON.parse(File.read(config_path))
+  ollama = config.dig("provider", "ollama")
+  base_url = ollama&.dig("options", "baseURL")
+  source_models = ollama&.fetch("models", nil)
+  unless base_url.is_a?(String) && !base_url.strip.empty? && source_models.is_a?(Hash)
+    raise "Invalid OpenCode config #{config_path}: provider.ollama.options.baseURL and provider.ollama.models are required"
+  end
+
+  model_ids = agent_models.values.uniq.map do |model|
+    prefix, id = model.split("/", 2)
+    unless prefix == "ollama" && id && source_models.key?(id)
+      raise "Invalid OpenCode config #{config_path}: Pi agent model #{model.inspect} must reference provider.ollama.models"
+    end
+    { "id" => id }
+  end
+  { "baseUrl" => base_url, "models" => model_ids }
+rescue JSON::ParserError => e
+  raise "Invalid OpenCode config #{config_path}: #{e.message}"
 end
 
 # Parse the canonical agent file's frontmatter and body.
@@ -266,6 +337,19 @@ def render_cursor_agent(src, name)
   FILE
 end
 
+# Pi requires YAML frontmatter to be the first content in the file. The marker
+# therefore follows its closing delimiter; our_generated? recognizes this form.
+def render_pi_agent(src, name, model)
+  canonical_fm, body = parse_agent_file(src)
+  yaml_str = YAML.dump(canonical_fm.merge("model" => model)).sub(/\A---\n/, "")
+  <<~FILE
+    ---
+    #{yaml_str}---
+    # #{GENERATED_MARKER}
+    #{body}
+  FILE
+end
+
 # Render a generated agent file for Codex: marker comment + TOML fields.
 def render_codex_agent(src, name)
   canonical_fm, body = parse_agent_file(src)
@@ -282,13 +366,14 @@ def render_codex_agent(src, name)
   FILE
 end
 
-# Render a generated agent file by format (:gemini, :cursor, :codex).
-def render_generated_agent(src, name, format_arg = nil, format: nil)
+# Render a generated agent file by format (:gemini, :cursor, :codex, :pi).
+def render_generated_agent(src, name, format_arg = nil, format: nil, model: nil)
   fmt = format || format_arg || :gemini
   case fmt.to_sym
   when :gemini then render_gemini_agent(src, name)
   when :cursor then render_cursor_agent(src, name)
   when :codex  then render_codex_agent(src, name)
+  when :pi     then render_pi_agent(src, name, model || raise(ArgumentError, "Pi model is required"))
   else
     raise ArgumentError, "Unknown format: #{fmt}"
   end
@@ -306,6 +391,10 @@ def install_symlink(art)
   if File.symlink?(dest)
     cur = File.expand_path(File.readlink(dest))
     return true if cur == src
+    unless our_symlink?(dest)
+      warn "  ! skip #{dest}: foreign symlink present, not managed by us"
+      return false
+    end
     File.delete(dest)
   end
   FileUtils.mkdir_p(File.dirname(dest))
@@ -322,7 +411,7 @@ def install_generated(art)
     return false
   end
   format = art.opts[:format] || :gemini
-  rendered = render_generated_agent(art.src, art.opts[:name], format: format)
+  rendered = render_generated_agent(art.src, art.opts[:name], format: format, model: art.opts[:model])
   # Idempotent: if our generated file already matches, do nothing.
   if our_generated?(dest) && File.read(dest) == rendered
     return true
@@ -331,6 +420,43 @@ def install_generated(art)
   File.delete(dest) if File.symlink?(dest) || File.exist?(dest)
   FileUtils.mkdir_p(File.dirname(dest))
   File.write(dest, rendered)
+  puts "  ~ #{dest} (generated)"
+  true
+end
+
+def pi_models_owned?(dest)
+  marker = File.join(File.dirname(dest), PI_MODELS_MARKER)
+  File.file?(dest) && File.file?(marker) &&
+    File.read(marker).start_with?("# #{GENERATED_MARKER}")
+rescue
+  false
+end
+
+def render_pi_models(ollama)
+  JSON.pretty_generate(
+    "providers" => {
+      "ollama" => {
+        "baseUrl" => ollama.fetch("baseUrl"),
+        "api" => "openai-completions",
+        "apiKey" => "ollama",
+        "models" => ollama.fetch("models"),
+      },
+    },
+  ) + "\n"
+end
+
+def install_pi_models(art)
+  dest = art.dest
+  if (File.exist?(dest) || File.symlink?(dest)) && !pi_models_owned?(dest)
+    warn "  ! skip #{dest}: existing file is not managed by us"
+    return false
+  end
+  rendered = render_pi_models(art.opts.fetch(:ollama))
+  return true if pi_models_owned?(dest) && File.read(dest) == rendered
+  File.delete(dest) if File.exist?(dest) || File.symlink?(dest)
+  FileUtils.mkdir_p(File.dirname(dest))
+  File.write(dest, rendered)
+  File.write(File.join(File.dirname(dest), PI_MODELS_MARKER), "# #{GENERATED_MARKER}\n")
   puts "  ~ #{dest} (generated)"
   true
 end
@@ -345,6 +471,14 @@ end
 def remove_generated(art)
   return false unless our_generated?(art.dest)
   File.delete(art.dest)
+  puts "  - #{art.dest} (generated)"
+  true
+end
+
+def remove_pi_models(art)
+  return false unless pi_models_owned?(art.dest)
+  File.delete(art.dest)
+  File.delete(File.join(File.dirname(art.dest), PI_MODELS_MARKER))
   puts "  - #{art.dest} (generated)"
   true
 end
@@ -369,17 +503,51 @@ def migrate_old_gemini_layout(target)
   end
 end
 
+# Pi previously linked its whole agents directory to the canonical source.
+# Replace only that exact installer-owned legacy link; never write through a
+# foreign directory or symlink.
+def prepare_pi_agents_dir(target)
+  dir = target.agents_dest_dir
+  if File.symlink?(dir)
+    if File.expand_path(File.readlink(dir)) == AGENTS_DIR
+      File.delete(dir)
+      puts "  - #{dir} (old Pi layout)"
+    else
+      warn "  ! skip #{dir}: foreign symlink present, not managed by us"
+      return false
+    end
+  elsif File.exist?(dir) && !pi_agents_dir_owned?(dir)
+    warn "  ! skip #{dir}: real directory present, not managed by us"
+    return false
+  end
+
+  FileUtils.mkdir_p(dir)
+  File.write(File.join(dir, PI_AGENTS_DIR_MARKER), "# #{GENERATED_MARKER}\n")
+  true
+end
+
+def pi_agents_dir_owned?(dir)
+  File.file?(File.join(dir, PI_AGENTS_DIR_MARKER)) &&
+    File.read(File.join(dir, PI_AGENTS_DIR_MARKER)).start_with?("# #{GENERATED_MARKER}")
+rescue
+  false
+end
+
 # ----- target operations ------------------------------------------------------
 
 def install_target(target)
   puts "Install: #{target.name} (#{target.config_root})"
-  FileUtils.mkdir_p(target.config_root)
-  migrate_old_gemini_layout(target) if target.name == "gemini"
+  # Build first: Pi validates its checked-in OpenCode model map here. This keeps
+  # a malformed or incomplete configuration from creating any target artifacts.
   arts = BUILDERS[target.name].call(target)
+  FileUtils.mkdir_p(target.config_root)
+  return unless target.name != "pi" || prepare_pi_agents_dir(target)
+  migrate_old_gemini_layout(target) if target.name == "gemini"
   arts.each do |art|
     case art.kind
     when :symlink then install_symlink(art)
     when :generate then install_generated(art)
+    when :pi_models then install_pi_models(art)
     end
   end
 end
@@ -391,6 +559,7 @@ def remove_target(target, prune: false)
     case art.kind
     when :symlink then remove_symlink(art)
     when :generate then remove_generated(art)
+    when :pi_models then remove_pi_models(art)
     end
   end
   # Also clean any leftover old-layout symlinks (gemini migration in reverse).
@@ -398,6 +567,10 @@ def remove_target(target, prune: false)
     migrate_old_gemini_layout(target)
   end
   return unless prune
+  if target.name == "pi" && pi_agents_dir_owned?(target.agents_dest_dir)
+    entries = Dir.children(target.agents_dest_dir) - [PI_AGENTS_DIR_MARKER]
+    File.delete(File.join(target.agents_dest_dir, PI_AGENTS_DIR_MARKER)) if entries.empty?
+  end
   if File.directory?(target.agents_dest_dir) && Dir.empty?(target.agents_dest_dir) &&
      target.agents_dest_dir != target.config_root
     FileUtils.rmdir(target.agents_dest_dir)

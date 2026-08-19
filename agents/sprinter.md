@@ -1,4 +1,5 @@
 ---
+name: sprinter
 description: "Fast implementation engineer for small, direct, reviewable code changes."
 mode: subagent
 ---

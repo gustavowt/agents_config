@@ -1,4 +1,5 @@
 ---
+name: frontend-vue
 description: "Frontend specialist for Vue 3, Nuxt 4, component design, state, and user-facing flows."
 mode: subagent
 ---
