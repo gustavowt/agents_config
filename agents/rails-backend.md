@@ -141,8 +141,61 @@ app/services/billing/
   the contract.
 - Keep compact/list and full-detail GraphQL types separate when detail contains
   heavier or more sensitive fields such as contact information.
-- Avoid callbacks for complex side effects unless the codebase already relies on
-  that pattern.
+- Avoid callbacks for complex side effects unless the codebase already
+  relies on that pattern.
+- **Secrets & credentials — hard rule:**
+  - NEVER touch any production or production-adjacent encrypted
+    credentials file. This covers ALL of:
+    `config/credentials.yml.enc` (env-less / default),
+    `config/credentials/production.yml.enc`,
+    `config/credentials/staging.yml.enc`, and the legacy
+    `config/secrets.yml.enc` / `config/secrets.yml`. Do not edit,
+    overwrite, regenerate, decrypt, print, or directly write any of
+    these files or their keys.
+  - Do NOT run any Rails credentials command that targets a
+    non-development, non-test file (production, staging, qa, preview,
+    uat, or any other non-dev environment). This includes,
+    non-exhaustively:
+    `bin/rails credentials:edit` (env-less, hits the prod file by
+    default),
+    `EDITOR=... bin/rails credentials:edit`,
+    `bin/rails credentials:edit --environment production`,
+    `bin/rails credentials:edit --environment staging`,
+    `bin/rails credentials:edit --environment <any non-dev env>`,
+    `bin/rails credentials:show` (any env, decrypts to stdout),
+    `bin/rails credentials:diff` (decrypts to stdout),
+    `bin/rails credentials:change`, and
+    `bin/rails credentials:generate`. If unsure whether a command is
+    safe, do not run it — surface it to the end user instead.
+  - NEVER read, print, log, interpolate, or commit the master key or
+    key files (`config/master.key`,
+    `config/credentials/production.key`,
+    `config/credentials/staging.key`) or the `RAILS_MASTER_KEY` /
+    `RAILS_ENV_KEY` environment variables into code, specs, fixtures,
+    responses, or git. The agent never needs these values.
+  - If a feature requires a new production secret, do NOT add it
+    yourself. Stop and surface instructions to the end user instead,
+    e.g.:
+    > This feature needs a new production secret `stripe_webhook_secret`.
+    > Add it, on a machine that has the production key available, by
+    > running:
+    >   bin/rails credentials:edit --environment production
+    > (this edits `config/credentials/production.yml.enc`). Append:
+    >   stripe_webhook_secret: <your_value>
+    > If your deployment uses the `RAILS_MASTER_KEY` env var instead of
+    > a `config/master.key` file, ensure that env var is set on the
+    > machine before running the command. Then commit only
+    > `config/credentials/production.yml.enc` — never commit the key
+    > file or the env var value. Redeploy.
+  - Use the **development** environment credentials freely to develop
+    and test features:
+    `bin/rails credentials:edit --environment development`
+    (file: `config/credentials/development.yml.enc`). Use disposable
+    fake values only (e.g. `sk_test_...`, `whsec_test_...`). Never
+    copy a real production secret value into the development file.
+  - Never hardcode secrets, keys, or tokens in code, specs, fixtures,
+    or initializers. Read them via `Rails.application.credentials[...]`
+    or `Rails.application.credentials.dig(...)`.
 
 ### 6. Verify — before marking done
 

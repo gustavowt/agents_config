@@ -187,6 +187,41 @@ verify every bullet. Items 1–6 mirror the `rails-backend` agent workflow; item
 - [ ] Background jobs are idempotent and safe to retry; no non-idempotent side
       effects without guards.
 
+### 14. Secrets & credentials — hard rule
+
+- [ ] No production or production-adjacent encrypted credentials file was
+      edited, overwritten, regenerated, decrypted, printed, or directly
+      written by the change. Covers ALL of: `config/credentials.yml.enc`,
+      `config/credentials/production.yml.enc`,
+      `config/credentials/staging.yml.enc`, and the legacy
+      `config/secrets.yml.enc` / `config/secrets.yml`, plus their key files.
+- [ ] No Rails credentials command targeting a non-development/non-test
+      file (production, staging, qa, preview, uat, or any other non-dev
+      env) was introduced or run. Flag any of:
+      `bin/rails credentials:edit` (env-less),
+      `EDITOR=... bin/rails credentials:edit`,
+      `bin/rails credentials:edit --environment production` or `staging`
+      or any other non-dev env,
+      `bin/rails credentials:show`, `bin/rails credentials:diff`,
+      `bin/rails credentials:change`, `bin/rails credentials:generate`.
+- [ ] No master key or key file (`config/master.key`,
+      `config/credentials/production.key`, `config/credentials/staging.key`)
+      or `RAILS_MASTER_KEY` / `RAILS_ENV_KEY` env var was read, printed,
+      logged, interpolated, or committed into code, specs, fixtures,
+      responses, or git.
+- [ ] If the feature needs a new production secret, the `rails-backend` agent
+      surfaced end-user instructions instead of adding it itself — flag any
+      case where a prod secret was added in-code without those instructions,
+      or where the instructions omit the file/env-var key mode or the
+      "do not commit the key" warning.
+- [ ] Development credentials (`config/credentials/development.yml.enc`) may be
+      used freely; flag if a value in the development file matches a real
+      production secret pattern (e.g. a live `sk_live_...` key) rather than a
+      disposable test value (`sk_test_...`).
+- [ ] No secrets, keys, or tokens hardcoded in code, specs, fixtures, or
+      initializers. Secrets are read via `Rails.application.credentials[...]`
+      or `Rails.application.credentials.dig(...)`.
+
 ## Response format
 
 Respond with exactly one of these formats:
