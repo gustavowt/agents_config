@@ -332,6 +332,63 @@ class AgentsConfigTest < Minitest::Test
     end
   end
 
+  def test_pi_install_adopts_and_regenerates_legacy_models_json
+    models_path = File.join(@home, ".pi", "agent", "models.json")
+    marker_path = File.join(@home, ".pi", "agent", PI_MODELS_MARKER)
+    legacy_content = JSON.pretty_generate(
+      "providers" => {
+        "ollama" => {
+          "models" => [{ "id" => "kimi-k2.7-code:cloud" }]
+        }
+      }
+    )
+    File.write(models_path, legacy_content)
+    refute pi_models_owned?(models_path)
+    refute File.exist?(marker_path)
+
+    out, ok = run_cli("pi")
+    assert ok, out
+    assert_includes out, "~ #{models_path} (adopted legacy Pi models, regenerated)"
+    assert pi_models_owned?(models_path)
+    assert File.file?(marker_path)
+
+    regenerated = JSON.parse(File.read(models_path))
+    model_ids = regenerated.fetch("providers").fetch("ollama").fetch("models").map { |m| m.fetch("id") }.sort
+    assert_equal %w[deepseek-v4-flash:0731-cloud glm-5.2:cloud kimi-k3:cloud], model_ids
+  end
+
+  def test_pi_install_preserves_foreign_or_invalid_models_json
+    models_path = File.join(@home, ".pi", "agent", "models.json")
+    marker_path = File.join(@home, ".pi", "agent", PI_MODELS_MARKER)
+
+    # 1. Invalid JSON
+    File.write(models_path, "{ not valid json")
+    out, ok = run_cli("pi")
+    assert ok, out
+    assert_includes out, "! skip #{models_path}: existing file is not managed by us"
+    assert_equal "{ not valid json", File.read(models_path)
+    refute pi_models_owned?(models_path)
+    refute File.exist?(marker_path)
+
+    # 2. Valid JSON but missing providers key
+    File.write(models_path, JSON.dump("not_providers" => "something"))
+    out, ok = run_cli("pi")
+    assert ok, out
+    assert_includes out, "! skip #{models_path}: existing file is not managed by us"
+    assert_equal JSON.dump("not_providers" => "something"), File.read(models_path)
+    refute pi_models_owned?(models_path)
+    refute File.exist?(marker_path)
+
+    # 3. Valid JSON but providers is not a Hash
+    File.write(models_path, JSON.dump("providers" => ["not", "a", "hash"]))
+    out, ok = run_cli("pi")
+    assert ok, out
+    assert_includes out, "! skip #{models_path}: existing file is not managed by us"
+    assert_equal JSON.dump("providers" => ["not", "a", "hash"]), File.read(models_path)
+    refute pi_models_owned?(models_path)
+    refute File.exist?(marker_path)
+  end
+
   def test_pi_remove_and_prune
     run_cli("pi")
     root = File.join(@home, ".pi", "agent")

@@ -445,19 +445,37 @@ def render_pi_models(ollama)
   ) + "\n"
 end
 
+def legacy_pi_models?(dest)
+  return false unless File.file?(dest) && !File.symlink?(dest)
+  parsed = JSON.parse(File.read(dest))
+  parsed.is_a?(Hash) && parsed["providers"].is_a?(Hash)
+rescue
+  false
+end
+
 def install_pi_models(art)
   dest = art.dest
+  adopted = false
   if (File.exist?(dest) || File.symlink?(dest)) && !pi_models_owned?(dest)
-    warn "  ! skip #{dest}: existing file is not managed by us"
-    return false
+    if legacy_pi_models?(dest)
+      adopted = true
+      File.write(File.join(File.dirname(dest), PI_MODELS_MARKER), "# #{GENERATED_MARKER}\n")
+    else
+      warn "  ! skip #{dest}: existing file is not managed by us"
+      return false
+    end
   end
   rendered = render_pi_models(art.opts.fetch(:ollama))
-  return true if pi_models_owned?(dest) && File.read(dest) == rendered
+  return true if !adopted && pi_models_owned?(dest) && File.read(dest) == rendered
   File.delete(dest) if File.exist?(dest) || File.symlink?(dest)
   FileUtils.mkdir_p(File.dirname(dest))
   File.write(dest, rendered)
   File.write(File.join(File.dirname(dest), PI_MODELS_MARKER), "# #{GENERATED_MARKER}\n")
-  puts "  ~ #{dest} (generated)"
+  if adopted
+    puts "  ~ #{dest} (adopted legacy Pi models, regenerated)"
+  else
+    puts "  ~ #{dest} (generated)"
+  end
   true
 end
 
