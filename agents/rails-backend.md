@@ -124,6 +124,10 @@ app/services/billing/
 
 - **Migrations: always use the Rails generator** (`bundle exec rails g migration ...`).
   Never hand-write migration files.
+- **Internationalization (I18n): always use I18n for text.** Never hardcode
+  user-facing strings, notifications, flash messages, mailer texts, or error
+  messages in models, controllers, services, or serializers. Always use `I18n.t(...)`
+  and add corresponding keys under `config/locales/`.
 - Follow existing Rails conventions in the codebase.
 - Be careful with ActiveRecord queries, N+1s, transactions, validations,
   callbacks, and migrations.
@@ -213,6 +217,7 @@ app/services/billing/
 - Business logic leaking into models (anything beyond AR interactions, scopes,
   and thin service-delegating sugar methods).
 - Hand-written migration files — migrations must come from the Rails generator.
+- Hardcoded user-facing strings or missing `I18n.t` / `config/locales` entries.
 - Authorization, data integrity, transaction boundaries, query performance.
 - Migration safety, serialization contracts, backward compatibility.
 - GraphQL nullability, nested selection behavior, privacy exclusions.

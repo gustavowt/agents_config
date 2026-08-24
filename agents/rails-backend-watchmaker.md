@@ -72,6 +72,8 @@ verify every bullet. Items 1–6 mirror the `rails-backend` agent workflow; item
 
 - [ ] Migrations were created with the Rails generator (`bundle exec rails g migration`),
       never hand-written.
+- [ ] User-facing strings, flash messages, mailer texts, and error messages use
+      Rails `I18n` (`I18n.t`) with keys defined in `config/locales/` — no hardcoded text.
 - [ ] No callbacks with complex side effects added unless the codebase already
       relies on that pattern.
 - [ ] GraphQL changes follow the typed-output rules: explicit nested types, no
