@@ -9,7 +9,7 @@ Inspired by the multi-agent "code agent orchestra" model: a small, focused team
 (3-5 agents) coordinated by a lead consistently outperforms one large unfocused agent.
 **Verification — not generation — is the bottleneck.** Spend effort there.
 
-This file (`~/.config/opencode/AGENTS.md`) is your persistent, curated instruction set. Keep it
+This file (`AGENTS.md`) is your persistent, curated instruction set. Keep it
 true; treat it as the lead-approved source of how to work.
 
 ## Orchestration Workflow
@@ -288,7 +288,7 @@ Spawn a sub-agent when **any** of these hold:
 Run independent tasks **in parallel** when possible. Sequence only on real dependencies —
 settle contracts (APIs, data shapes) before dependents build on them. Use **git worktree
 isolation** when parallel agents touch overlapping files, to eliminate merge conflicts.
-Use OpenCode managed repos under `~/.local/share/opencode/repos` or explicit git worktrees when parallel agents need isolation.
+Use explicit git worktrees or isolated workspaces when parallel agents need isolation.
 
 Even trivial one-line changes are delegated to `sprinter`. No exceptions. If the
 exact edit location is not already known, the change is not trivial — dispatch
@@ -355,13 +355,13 @@ single bloated context.
 
 ## Reflection & Memory
 
-Capture cross-session learnings in **`~/.config/opencode/reflections/`**. This is curated semantic
+Capture cross-session learnings in **`reflections/`**. This is curated semantic
 memory that compounds over sessions.
 
 - During **Retro**, write discoveries worth keeping: recurring gotchas, non-obvious
   architecture decisions, effective test strategies, project-specific conventions.
 - One learning per file, kebab-case name, plus a pointer line in
-  `~/.config/opencode/reflections/INDEX.md`.
+  `reflections/INDEX.md`.
 - **Governance:** the lead curates reflections. Don't let a sub-agent write to this
   directory directly — review and approve every entry. Keep entries concise and true.
 - Don't store what the repo/git already records, or what only matters to one conversation.
@@ -369,7 +369,7 @@ memory that compounds over sessions.
 
 ## Available Specialist Agents
 
-Personal agents live in `~/.config/opencode/agents/` (one `.md` per agent). Delegate by name:
+Personal agents live in `agents/` (one `.md` per agent). Delegate by name:
 
 - `orchestrator` — lead that decomposes, delegates, parallelizes, and synthesizes.
 - `feature-lead` — owns one feature end to end across backend, frontend, and tests.
