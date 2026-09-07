@@ -14,22 +14,22 @@
       "model": "ollama/kimi-k3:cloud"
     },
     "cartographer": {
-      "model": "ollama/deepseek-v4-flash:0731-cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "designer": {
-      "model": "ollama/deepseek-v4-flash:0731-cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "docs-writer": {
-      "model": "ollama/deepseek-v4-flash:0731-cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "duckdb-specialist": {
-      "model": "ollama/deepseek-v4-flash:0731-cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "feature-lead": {
       "model": "ollama/glm-5.3:cloud"
     },
     "frontend-vue": {
-      "model": "ollama/deepseek-v4-flash:0731-cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "infra-platform": {
       "model": "ollama/kimi-k3:cloud"
@@ -50,22 +50,22 @@
       "model": "ollama/glm-5.3-flash:cloud"
     },
     "rails-backend": {
-      "model": "ollama/deepseek-v4-flash:0731-cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "rails-backend-watchmaker": {
       "model": "ollama/kimi-k3:cloud"
     },
     "redteam": {
-      "model": "ollama/deepseek-v4-flash:0731-cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "security-guardian": {
-      "model": "ollama/deepseek-v4-flash:0731-cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "sprinter": {
-      "model": "ollama/deepseek-v4-flash:0731-cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "watchmaker": {
-      "model": "ollama/deepseek-v4-flash:0731-cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "frontend-vue-watchmaker": {
       "model": "ollama/kimi-k3:cloud"
