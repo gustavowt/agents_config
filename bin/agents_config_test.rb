@@ -359,7 +359,7 @@ class AgentsConfigTest < Minitest::Test
 
     regenerated = JSON.parse(File.read(models_path))
     model_ids = regenerated.fetch("providers").fetch("ollama").fetch("models").map { |m| m.fetch("id") }.sort
-    assert_equal %w[deepseek-v4-flash:0731-cloud glm-5.2:cloud kimi-k3:cloud], model_ids
+    assert_equal %w[glm-5.3-flash:cloud], model_ids
   end
 
   def test_pi_install_preserves_foreign_or_invalid_models_json

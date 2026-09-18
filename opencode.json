@@ -11,7 +11,7 @@
       "disable": true
     },
     "plan": {
-      "model": "ollama/kimi-k3:cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "cartographer": {
       "model": "ollama/glm-5.3-flash:cloud"
@@ -26,25 +26,25 @@
       "model": "ollama/glm-5.3-flash:cloud"
     },
     "feature-lead": {
-      "model": "ollama/glm-5.3:cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "frontend-vue": {
       "model": "ollama/glm-5.3-flash:cloud"
     },
     "infra-platform": {
-      "model": "ollama/kimi-k3:cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "ionic-cross-platform": {
-      "model": "ollama/glm-5.3:cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "janitor": {
-      "model": "ollama/kimi-k3:cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "orchestrator": {
-      "model": "ollama/glm-5.3:cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "principal": {
-      "model": "ollama/kimi-k3:cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "qa-tester": {
       "model": "ollama/glm-5.3-flash:cloud"
@@ -53,7 +53,7 @@
       "model": "ollama/glm-5.3-flash:cloud"
     },
     "rails-backend-watchmaker": {
-      "model": "ollama/kimi-k3:cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "redteam": {
       "model": "ollama/glm-5.3-flash:cloud"
@@ -68,10 +68,10 @@
       "model": "ollama/glm-5.3-flash:cloud"
     },
     "frontend-vue-watchmaker": {
-      "model": "ollama/kimi-k3:cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "image-analyst": {
-      "model": "ollama/kimi-k3:cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     }
   },
   "plugin": [
@@ -96,20 +96,8 @@
         "baseURL": "http://localhost:11434/v1"
       },
       "models": {
-        "kimi-k3:cloud": {
-          "name": "kimi-k3"
-        },
-        "glm-5.2:cloud": {
-          "name": "glm-5.2"
-        },
-        "glm-5.3:cloud": {
-          "name": "glm-5.3"
-        },
         "glm-5.3-flash:cloud": {
           "name": "glm-5.3-flash"
-        },
-        "deepseek-v4-flash:0731-cloud": {
-          "name": "deepseek-v4-flash"
         }
       }
     }
