@@ -317,7 +317,12 @@ class AgentsConfigTest < Minitest::Test
     assert_equal "http://localhost:11434/v1", ollama.fetch("baseUrl")
     assert_equal "openai-completions", ollama.fetch("api")
     assert_equal "ollama", ollama.fetch("apiKey")
-    assert_equal %w[deepseek-v4-flash:0731-cloud glm-5.2:cloud kimi-k3:cloud],
+    agent_cfg = JSON.parse(File.read(File.join(STORE, "opencode.json"))).fetch("agent")
+    expected_ids = Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.map do |path|
+      name = File.basename(path, ".md")
+      agent_cfg.fetch(name).fetch("model").split("/", 2).fetch(1)
+    end.uniq.sort
+    assert_equal expected_ids,
                  ollama.fetch("models").map { |model| model.fetch("id") }.sort
     assert File.file?(File.join(@home, ".pi", "agent", PI_MODELS_MARKER))
     expected_models = JSON.parse(File.read(File.join(STORE, "opencode.json"))).fetch("agent")

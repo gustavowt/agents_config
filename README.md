@@ -6,8 +6,11 @@ the global config directories of Cursor, OpenCode, Gemini (Antigravity), Codex,
 and Pi.
 
 Canonical agent files live in [`agents/`](agents/). Shared orchestration rules
-live in [`AGENTS.md`](AGENTS.md). The installer never edits those files — it
-symlinks or generates tool-specific copies in each tool's config directory.
+live in [`AGENTS.md`](AGENTS.md). Reusable worked examples referenced by the
+rules live in [`templates/`](templates/) (repo-only; not installed by the
+installer). The installer never edits canonical files — it symlinks or
+generates tool-specific copies of `agents/` and `AGENTS.md` in each tool's
+config directory.
 
 ## Prerequisites
 

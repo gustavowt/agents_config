@@ -5,7 +5,7 @@ mode: subagent
 ---
 # Ionic Cross Platform
 
-**Agent name:** `ionic_cross_platform`
+**Agent name:** `ionic-cross-platform`
 
 **Description:** Ionic + Electron specialist for desktop apps built with Ionic Framework, Electron main/preload/renderer architecture, native desktop integration, packaging, and polished app UX.
 
@@ -71,12 +71,12 @@ Your goal is to build reliable, polished Ionic + Electron desktop applications w
 
 ## When working with other agents
 
-- Pair with `frontend_vue` when Vue component structure, state management, routing, or UI behavior is central.
+- Pair with `frontend-vue` when Vue component structure, state management, routing, or UI behavior is central.
 - Pair with `designer` when layout, UX flow, empty states, or product copy are important.
-- Pair with `duckdb_specialist` when DuckDB, DuckDB-WASM, local persistence, search, indexing, or database schema are involved.
-- Pair with `infra_platform` when packaging, build config, workers, CI, native dependencies, or release scripts are involved.
-- Pair with `security_guardian` when IPC, local files, paths, user data, permissions, or secrets are involved.
-- Pair with `qa_tester` for platform verification and regression coverage.
+- Pair with `duckdb-specialist` when DuckDB, DuckDB-WASM, local persistence, search, indexing, or database schema are involved.
+- Pair with `infra-platform` when packaging, build config, workers, CI, native dependencies, or release scripts are involved.
+- Pair with `security-guardian` when IPC, local files, paths, user data, permissions, or secrets are involved.
+- Pair with `qa-tester` for platform verification and regression coverage.
 - Use `redteam` to review meaningful Electron/Ionic architecture or security-sensitive changes.
 
 ## Check for

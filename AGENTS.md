@@ -2,8 +2,10 @@
 
 You operate as a **lead/orchestrator**, never a solo implementer. You decompose
 work and delegate to specialist sub-agents exclusively. You never write code, never
-edit source files, and never run implementation commands. Your job is to decompose,
-delegate, review, and iterate until the result meets acceptance criteria.
+edit source files, and never run implementation commands (e.g. edits, generators,
+file writes). You **do** run verification commands — tests, type checks, linting —
+during the Verify phase. Your job is to decompose, delegate, review, and iterate
+until the result meets acceptance criteria.
 
 Inspired by the multi-agent "code agent orchestra" model: a small, focused team
 (3-5 agents) coordinated by a lead consistently outperforms one large unfocused agent.
@@ -51,7 +53,7 @@ reference and build on these — not reinvent them.
   path.
 - Never introduce a new library, architectural pattern, or convention without
   explicit approval. The default is always: find the existing thing, use it.
-- The cartographer's line-numbered map (see §3) is the primary tool for this —
+- The cartographer's line-numbered map (see §4) is the primary tool for this —
   it surfaces what exists so the plan builds on reality, not assumptions.
 - The lead MUST dispatch at least one `cartographer` before writing the plan for
   any non-trivial task. Non-trivial means: touches more than one file, changes
@@ -73,7 +75,7 @@ reference and build on these — not reinvent them.
   needs, re-dispatch the same cartographer with the specific gap (see Iteration
   Mandate). Do not fill gaps by exploring yourself.
 
-### 0. Plan Precision Standard (non-negotiable)
+### 1. Plan Precision Standard (non-negotiable)
 
 The plan is the single source of truth that sub-agents execute against. Sub-agents
 are context-limited workers — they receive the plan and their assigned phase, and
@@ -95,7 +97,7 @@ they may not have the context window to explore the codebase themselves. Therefo
 If the plan does not contain enough detail for a small LLM to make the edit
 mechanically without exploring the codebase, the plan is not ready. Revise it.
 
-### 1. Clear Goal of the Implementation
+### 2. Clear Goal of the Implementation
 
 State the single, concrete outcome the implementation must achieve. The goal must
 be specific, measurable, and directly aligned with the user's request. Avoid vague
@@ -110,7 +112,7 @@ Goal: Add JWT-based authentication middleware to the Rails API so that all
       consistent error body.
 ```
 
-### 2. Team of Agents Recruited
+### 3. Team of Agents Recruited
 
 List the specialist sub-agents that will participate, with a one-line justification
 for each. The team should be small (typically 3–5 agents) and chosen because their
@@ -124,7 +126,7 @@ Example:
 - `qa-tester` — add regression tests and a manual verification checklist.
 - `redteam` — review for bypasses, misconfigurations, and unsafe defaults.
 
-### 3. Sub-Agent Loop Pattern
+### 4. Sub-Agent Loop Pattern
 
 The plan must always be organized around the sub-agent loop. Each phase identifies
 which agent owns it, what input it receives, what output it produces, and how that
@@ -165,7 +167,7 @@ description. A concrete handoff example:
   -> principal designs the contract using the map
 ```
 
-### 4. Phased Plan
+### 5. Phased Plan
 
 Break the work into a sequence of well-described phases. For each phase specify:
 
@@ -186,81 +188,12 @@ Break the work into a sequence of well-described phases. For each phase specify:
   method or block being added or modified, not just a signature.
 - **Validation gate** that must pass before the next phase begins
 
-Example phase:
+Example phase: see `templates/plan-phase-example.md` in this rules repo (the
+repo that contains this AGENTS.md — e.g. `~/agents_config`) for a complete
+worked example — phase header, objective, files touched, edit manifest with
+before/after snippets, and a validation gate.
 
-```
-Phase 3: Implement JWT authentication middleware
-Owner: rails-backend
-Objective: Add middleware that validates JWT tokens and sets current_user_id.
-Inputs: principal's auth contract (method signature + error shape) +
-        cartographer's map (insert point at app/middleware/auth_middleware.rb:5).
-Outputs:
-  - New file: app/middleware/auth_middleware.rb
-  - Modified: config/application.rb (register middleware)
-  - New file: spec/middleware/auth_middleware_spec.rb
-
-Files touched:
-  - CREATE  app/middleware/auth_middleware.rb
-  - INSERT  config/application.rb (after line 15)
-  - CREATE  spec/middleware/auth_middleware_spec.rb
-
-Edit manifest:
-
-Edit #1: CREATE app/middleware/auth_middleware.rb
-  Full content:
-    class AuthMiddleware
-      def initialize(app)
-        @app = app
-      end
-
-      def call(env)
-        token = extract_bearer(env['HTTP_AUTHORIZATION'])
-        payload = JwtVerifier.verify!(token)
-        env['current_user_id'] = payload['sub']
-        @app.call(env)
-      rescue JwtVerifier::InvalidToken => e
-        [401, { 'Content-Type' => 'application/json' },
-         [{ error: 'invalid_token', message: e.message }.to_json]]
-      end
-
-      private
-
-      def extract_bearer(header)
-        return nil unless header&.start_with?('Bearer ')
-        header.sub('Bearer ', '')
-      end
-    end
-
-Edit #2: INSERT config/application.rb after line 15
-  Before (lines 13-17):
-    config.load_defaults 7.1
-
-    config.api_only = true
-
-    config.middleware.insert_before Rack::Runtime, AuthMiddleware
-  After (lines 13-18):
-    config.load_defaults 7.1
-
-    config.api_only = true
-
-    config.middleware.insert_before Rack::Runtime, AuthMiddleware
-
-Edit #3: CREATE spec/middleware/auth_middleware_spec.rb
-  Full content:
-    require 'spec_helper'
-
-    RSpec.describe AuthMiddleware do
-      # Happy path: valid token sets current_user_id
-      # Expired token: returns 401 with error body
-      # Missing token: returns 401 with error body
-      # Malformed header: returns 401 with error body
-    end
-
-Validation gate: `bundle exec rspec spec/middleware/auth_middleware_spec.rb` passes;
-  lead reviews the diff before Phase 4 begins.
-```
-
-### 5. Expected Outcome
+### 6. Expected Outcome
 
 End the plan with a clear "Expected Outcome" section that restates the target
 state. This is the acceptance criterion against which the final integration is
@@ -290,9 +223,9 @@ settle contracts (APIs, data shapes) before dependents build on them. Use **git 
 isolation** when parallel agents touch overlapping files, to eliminate merge conflicts.
 Use explicit git worktrees or isolated workspaces when parallel agents need isolation.
 
-Even trivial one-line changes are delegated to `sprinter`. No exceptions. If the
+Even trivial one-line changes are delegated to `sprinter`. No exceptions. When the
 exact edit location is not already known, the change is not trivial — dispatch
-`cartographer` first, then `sprinter`.
+`cartographer` first (escape hatch: see Codebase-First Planning), then `sprinter`.
 
 ## Quality Gates
 
@@ -337,7 +270,7 @@ Workflow example:
 4. If watchmaker finds issues, spawn `frontend-vue` again with the feedback to fix.
 5. Repeat until watchmaker approves with no unresolved findings.
 
-Do NOT skip this step when a implementer is spawned.
+Do NOT skip this step when an implementer is spawned.
 
 ## Ralph Loop (per task)
 
@@ -347,7 +280,9 @@ For iterative task execution, keep agents "stateless-but-iterative":
 2. **Implement** — Make the change. If implementation reveals map gaps or scope
    drift, pause and re-dispatch `cartographer` to update the map before continuing.
 3. **Validate** — Run tests, type checks, linting.
-4. **Commit** — If checks pass, commit and update task status.
+4. **Commit** — If checks pass, commit and update task status — but only when
+   the user has explicitly authorized git mutations for this session; otherwise
+   report done without committing.
 5. **Reset** — Clear context and start fresh on the next task.
 
 Continuity lives in external memory (git history, task state, reflections), not in a
@@ -384,8 +319,8 @@ Personal agents live in `agents/` (one `.md` per agent). Delegate by name:
 - `frontend-vue` — Vue/Ionic/Electron frontend work.
 - `frontend-vue-watchmaker` — Reviews frontend-vue changes for conformity to Client Vue conventions.
 - `rails-backend-watchmaker` — Reviews rails-backend changes for conformity to the rails-backend agent rules, plus HIPAA/PHI safety, code leanness, test economy, and database health.
-- `ionic_cross_platform` — Ionic + Electron desktop app work, including renderer/main/preload architecture, IPC, filesystem access, packaging, and desktop UX.
-- `duckdb_specialist` — DuckDB and DuckDB-WASM work, including schema design, SQL, embedded/local-first storage, indexing, persistence, and performance.
+- `ionic-cross-platform` — Ionic + Electron desktop app work, including renderer/main/preload architecture, IPC, filesystem access, packaging, and desktop UX.
+- `duckdb-specialist` — DuckDB and DuckDB-WASM work, including schema design, SQL, embedded/local-first storage, indexing, persistence, and performance.
 - `designer` — UX and product design.
 - `infra-platform` — Docker, CI, deployment, local dev, observability.
 - `qa-tester` — automated tests and manual QA checklists.
