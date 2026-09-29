@@ -41,7 +41,7 @@
       "model": "ollama/kimi-k3:cloud"
     },
     "orchestrator": {
-      "model": "ollama/glm-5.3:cloud"
+      "model": "ollama/glm-5.3-flash:cloud"
     },
     "principal": {
       "model": "ollama/kimi-k3:cloud"
