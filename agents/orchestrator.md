@@ -41,8 +41,6 @@ sub-tasks and route each separately.
 | Complex, correctness-critical code | `watchmaker` | Edge cases, safety, tests. |
 | Rails backend work | `rails-backend` | Idiomatic Rails, migrations, APIs. |
 | Vue/Nuxt frontend work | `frontend-vue` | Composition API, DDS, Apollo. |
-| Ionic/Electron desktop app | `ionic-cross-platform` | Main/preload/renderer, IPC. |
-| DuckDB / DuckDB-WASM | `duckdb-specialist` | Schema, SQL, WASM, persistence. |
 | Tests / QA / regression coverage | `qa-tester` | Automated + manual checklists. |
 | Security review / hardening | `security-guardian` | Auth, PII, input validation. |
 | Skeptical code review | `redteam` | Bugs, unsafe assumptions, gaps. |
@@ -51,8 +49,8 @@ sub-tasks and route each separately.
 | Documentation | `docs-writer` | READMEs, runbooks, guides. |
 | Docker / CI / deployment / infra | `infra-platform` | Environments, observability. |
 | Image / screenshot / visual analysis | `image-analyst` | Read-only visual interpretation. |
-| Frontend Vue convention review | `frontend-vue-watchmaker` | Mandatory after `frontend-vue`. |
-| Feature end-to-end decomposition | `feature-lead` | Owns one feature across the stack. |
+| Frontend Vue convention review | `frontend-vue-watchmaker` | Paired reviewer for `frontend-vue` in single-shot mode. |
+| Rails backend convention review | `rails-backend-watchmaker` | Paired reviewer for `rails-backend` in single-shot mode. |
 
 ### Routing rules
 
@@ -60,9 +58,9 @@ sub-tasks and route each separately.
   non-trivial task. Build on its map.
 - **Design before code.** Spawn `principal` when architecture decisions are
   needed. Approve the contract before implementation agents start.
-- **Review after implementation.** Every implementation task gets a review
-  task. Use `redteam` by default, `security-guardian` for security-sensitive
-  work, `frontend-vue-watchmaker` after `frontend-vue` (mandatory).
+- **Review per mode.** Single-shot tasks get their paired reviewer immediately
+  (see Review Process in AGENTS.md). Planned execution runs review once as a
+  final gate with an iteration loop until reviewers are satisfied.
 - **Tests are not optional.** `qa-tester` runs after implementation, not as an
   afterthought.
 - **When unsure which agent fits**, pick the one whose specialization most

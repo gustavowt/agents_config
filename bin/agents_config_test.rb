@@ -129,14 +129,13 @@ class AgentsConfigTest < Minitest::Test
     assert ok, out
 
     pro_agents = %w[
-      orchestrator principal feature-lead infra-platform
+      orchestrator principal infra-platform
       rails-backend-watchmaker frontend-vue-watchmaker image-analyst redteam
     ]
 
     flash_agents = %w[
       cartographer sprinter watchmaker rails-backend frontend-vue
-      qa-tester security-guardian designer docs-writer duckdb-specialist
-      ionic-cross-platform janitor
+      qa-tester security-guardian designer docs-writer janitor
     ]
 
     pro_agents.each do |name|

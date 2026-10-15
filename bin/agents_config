@@ -42,7 +42,6 @@ PI_MODELS_MARKER = ".models_config_generated"
 GEMINI_AGENT_MODELS = {
   "orchestrator"              => "gemini-2.5-pro",
   "principal"                 => "gemini-2.5-pro",
-  "feature-lead"              => "gemini-2.5-pro",
   "infra-platform"            => "gemini-2.5-pro",
   "rails-backend-watchmaker"  => "gemini-2.5-pro",
   "frontend-vue-watchmaker"   => "gemini-2.5-pro",
@@ -58,8 +57,6 @@ GEMINI_AGENT_MODELS = {
   "security-guardian"         => "gemini-2.5-flash",
   "designer"                  => "gemini-2.5-flash",
   "docs-writer"               => "gemini-2.5-flash",
-  "duckdb-specialist"         => "gemini-2.5-flash",
-  "ionic-cross-platform"      => "gemini-2.5-flash",
   "janitor"                   => "gemini-2.5-flash",
 }.freeze
 
