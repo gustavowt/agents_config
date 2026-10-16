@@ -1,0 +1,9 @@
+# AI Stream Buffering Pitfalls (StreamBuffers)
+
+`app/services/ai/stream_buffers.rb` (DentalWave) patterns worth remembering:
+
+1. **A whitespace char in the flush regex defeats buffering entirely.** LLM tokens almost always contain whitespace, so `FLUSH_CHAR_REGEX = /[\s.,;:!?\n>]/` flushed ~every token despite the 40ms/30-char window. Smooth streaming = time window + size cap + newline only (e.g. 0.1s / 60 chars / `/\n/`).
+2. **Never broadcast the full accumulated string with every delta.** `content_full` per flush is O(n²) in payload and frontend reparse work. ActionCable-over-TCP is ordered and reliable; deltas alone are sufficient. Frontend keeps a harmless `content_full` else-if fallback (dead but tolerant).
+3. **Tag-boundary flushes (`>` trigger) are unnecessary once the FRONTEND masks tags.** Fix tag rendering client-side (mask complete/unknown/partial tags in the parse layer), not by tuning the backend to flush tags fast.
+4. **Shared buffer classes used by two pipelines need constructor kwargs with legacy defaults.** `ContentBuffer` gained `flush_interval:/max_buffer_size:/flush_char_regex:` defaulting to the original constants so the staff-assistant orchestrator (bare constructor) stays byte-identical; only the summary pipeline passes the new policy. Pin both behaviors in tests (new policy + legacy defaults).
+5. Frontend masking order that works inside the parse layer: (1) drop closed unknown-tag regions wholesale, (2) withhold from the earliest unterminated unknown-tag `<` to buffer end, (3) strip any remaining complete `<tag>` markup, (4) withhold a trailing partial `<...` at raw-buffer end. Known-section auto-close (EOS semantics) is preserved — content keeps flowing for known open sections. Prose `<` collisions: digit/space after `<` never matches `[a-z0-9_/]*$` at buffer end, so prose survives with at worst one-chunk withhold.
