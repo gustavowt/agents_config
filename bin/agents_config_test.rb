@@ -10,6 +10,7 @@ require "tmpdir"
 require "fileutils"
 require "json"
 require "open3"
+require "socket"
 require "yaml"
 require "minitest/autorun"
 
@@ -288,128 +289,103 @@ class AgentsConfigTest < Minitest::Test
     assert_equal 'name = "custom"', File.read(real)
   end
 
-  def test_opencode_install_generates_agent_files_with_opencode_models
+  def test_opencode_install_symlinks_agents_dir_and_emits_routing_config
+    jsonc = File.join(@home, ".config", "opencode", "opencode.jsonc")
+    File.write(jsonc, '{ "sentinel": "owner-curated-opencode-jsonc" }')
+    jsonc_before = File.read(jsonc)
+
     out, ok = run_cli("opencode")
     assert ok, out
-    agents_dir = File.join(@home, ".config", "opencode", "agents")
-    assert File.directory?(agents_dir), out
-    refute File.symlink?(agents_dir), out
 
-    store_agents = Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.map { |p| File.basename(p, ".md") }
-    generated = Dir.glob(File.join(agents_dir, "*.md")).sort
-    assert_equal store_agents.map { |n| File.join(agents_dir, "#{n}.md") }.sort, generated,
-                 "expected exactly one generated .md per store agent"
+    agents_dir = File.join(@home, ".config", "opencode", "agents")
+    assert File.symlink?(agents_dir), out
+    assert File.exist?(agents_dir), out
+    assert_equal AGENTS_DIR, File.expand_path(File.readlink(agents_dir))
 
     rules = File.join(@home, ".config", "opencode", "AGENTS.md")
     assert File.symlink?(rules), out
     assert File.exist?(rules), out
+    assert_equal File.join(STORE, "AGENTS.md"), File.expand_path(File.readlink(rules))
 
-    sprinter_file = File.join(agents_dir, "sprinter.md")
-    refute File.symlink?(sprinter_file)
-    sprinter_fm = parse_frontmatter(sprinter_file)
-    assert_equal "sprinter", sprinter_fm["name"]
-    assert sprinter_fm["description"], "sprinter must keep a description"
-    assert_equal "subagent", sprinter_fm["mode"]
-    assert_equal "ollama-cloud/deepseek-v4.1-flash:1017", sprinter_fm["model"]
+    config_path = File.join(@home, ".config", "opencode", "opencode.json")
+    assert File.file?(config_path), out
+    config = JSON.parse(File.read(config_path))
+    assert_equal ["agent"], config.keys,
+                 "emitted opencode.json must contain ONLY the agent block"
 
-    orch_fm = parse_frontmatter(File.join(agents_dir, "orchestrator.md"))
-    assert_equal "orchestrator", orch_fm["name"]
-    assert_equal "primary", orch_fm["mode"]
-    refute orch_fm.key?("permission"), "canonical permission key must be dropped for opencode"
+    marker = File.join(@home, ".config", "opencode", ".opencode_routing_generated")
+    assert File.file?(marker), out
+    assert_equal "# #{GENERATED_MARKER}\n", File.read(marker)
+
+    # A hand-made opencode.jsonc (never referenced by the installer) must be
+    # untouched by install.
+    assert_equal jsonc_before, File.read(jsonc), "opencode.jsonc must not be touched"
   end
 
-  def test_opencode_generates_expected_models_per_agent
+  def test_opencode_emits_translated_models_for_every_agent_and_plan
     out, ok = run_cli("opencode")
     assert ok, out
-    agents_dir = File.join(@home, ".config", "opencode", "agents")
-    expected = {
-      # deepseek group
-      "frontend-vue"             => "ollama-cloud/deepseek-v4.1-flash:1017",
-      "rails-backend"            => "ollama-cloud/deepseek-v4.1-flash:1017",
-      "sprinter"                 => "ollama-cloud/deepseek-v4.1-flash:1017",
-      "janitor"                  => "ollama-cloud/deepseek-v4.1-flash:1017",
-      # glm group
-      "orchestrator"             => "ollama-cloud/glm-5.3-flash",
-      "qa-tester"                => "ollama-cloud/glm-5.3-flash",
-      "watchmaker"               => "ollama-cloud/glm-5.3-flash",
-      "rails-backend-watchmaker" => "ollama-cloud/glm-5.3-flash",
-      "cartographer"             => "ollama-cloud/glm-5.3-flash",
-      "designer"                 => "ollama-cloud/glm-5.3-flash",
-      "docs-writer"              => "ollama-cloud/glm-5.3-flash",
-      "frontend-vue-watchmaker"  => "ollama-cloud/glm-5.3-flash",
-      # mistral group
-      "redteam"                  => "ollama-cloud/mistral-large-4",
-      "security-guardian"        => "ollama-cloud/mistral-large-4",
-      # kimi group
-      "principal"                => "ollama-cloud/kimi-k3",
-      "infra-platform"           => "ollama-cloud/kimi-k3",
-      "image-analyst"            => "ollama-cloud/kimi-k3",
-    }
+    routing = JSON.parse(File.read(File.join(@home, ".config", "opencode", "opencode.json"))).fetch("agent")
+    # Derive the expected map from the canonical store through the same
+    # default-resolution transform the install path uses: the test process and
+    # the CLI subprocess share hostname + committed hosts.json, so derived ==
+    # emitted on any machine (no machine-dependent hardcoded ids here).
+    canon = JSON.parse(File.read(OPENCODE_CONFIG)).fetch("agent")
+    expected = canon.each_with_object({}) do |(name, entry), map|
+      model = entry.is_a?(Hash) ? entry["model"] : nil
+      map[name] = { "model" => opencode_model_id(model) } if model.is_a?(String) && !model.strip.empty?
+    end
+    # Built-in "plan" carries a model and routes; disable-only built-ins do not.
+    assert expected.key?("plan"), "\"plan\" must carry a model in the canonical map"
+    refute expected.key?("explore")
+    refute expected.key?("build")
     assert_equal Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.map { |p| File.basename(p, ".md") }.sort,
-                 expected.keys.sort,
+                 (expected.keys - ["plan"]).sort,
                  "expected model map must cover every canonical agent"
-    expected.each do |name, model|
-      file = File.join(agents_dir, "#{name}.md")
-      assert File.file?(file), "Expected generated file #{file} to exist"
-      fm = parse_frontmatter(file)
-      assert_equal name, fm["name"], "wrong name for #{name}: #{fm.inspect}"
-      assert fm["description"], "#{name} must keep a description"
-      assert_equal model, fm["model"], "Expected #{name} to use #{model} (got #{fm['model'].inspect})"
+    assert_equal expected.keys.sort, routing.keys.sort,
+                 "routing must contain exactly the modeled agents"
+    expected.each do |name, entry|
+      assert_equal entry, routing.fetch(name),
+                   "wrong routing entry for #{name}: #{routing[name].inspect}"
     end
+    # Disable-only built-ins carry no model and must not become routing entries.
+    refute routing.key?("explore")
+    refute routing.key?("build")
   end
 
-  def test_opencode_migrates_installer_owned_agents_symlink
-    legacy_dir = File.join(@home, ".config", "opencode", "agents")
-    File.symlink(AGENTS_DIR, legacy_dir)
+  def test_opencode_remove_only_withdraws_routing_config
+    config_dir = File.join(@home, ".config", "opencode")
+    jsonc = File.join(config_dir, "opencode.jsonc")
+    File.write(jsonc, '{ "sentinel": "owner-curated-opencode-jsonc" }')
+    jsonc_before = File.read(jsonc)
 
-    store_files = Dir.glob(File.join(AGENTS_DIR, "*.md")).sort
-    snapshot = store_files.to_h { |path| [path, File.read(path)] }
-
-    out, ok = run_cli("opencode")
-    assert ok, out
-    assert_includes out, "old opencode layout"
-    assert File.directory?(legacy_dir), out
-    refute File.symlink?(legacy_dir), out
-
-    generated = Dir.glob(File.join(legacy_dir, "*.md")).sort
-    assert_equal store_files.map { |p| File.join(legacy_dir, File.basename(p)) }.sort, generated
-
-    snapshot.each do |path, content|
-      assert_equal content, File.read(path), "Store file #{path} must stay byte-identical during opencode migration"
-    end
-    assert_equal store_files, Dir.glob(File.join(AGENTS_DIR, "*.md")).sort,
-                 "Store file list must not change during opencode migration"
-  end
-
-  def test_opencode_remove_and_prune
-    store_files = Dir.glob(File.join(AGENTS_DIR, "*.md")).sort
-    snapshot = store_files.to_h { |path| [path, File.read(path)] }
-
+    # (A) A normal install + --remove withdraws only the routing file + marker.
     run_cli("opencode")
-    agents_dir = File.join(@home, ".config", "opencode", "agents")
-    assert File.file?(File.join(agents_dir, "sprinter.md"))
-    assert File.symlink?(File.join(@home, ".config", "opencode", "AGENTS.md"))
+    config_path = File.join(config_dir, "opencode.json")
+    assert File.file?(config_path)
+    assert File.symlink?(File.join(config_dir, "agents"))
+    assert File.symlink?(File.join(config_dir, "AGENTS.md"))
 
-    out, ok = run_cli("opencode", "--remove", "--prune")
+    out, ok = run_cli("opencode", "--remove")
     assert ok, out
-    refute File.exist?(File.join(@home, ".config", "opencode", "AGENTS.md"))
-    refute File.exist?(agents_dir), "agents dir should be pruned when only our generated files were removed"
-    assert File.exist?(File.join(@home, ".config", "opencode"))
+    refute File.exist?(config_path), "emitted opencode.json must be removed"
+    refute File.exist?(File.join(config_dir, ".opencode_routing_generated")),
+           "marker must be removed"
+    assert_equal jsonc_before, File.read(jsonc),
+                 "opencode.jsonc must survive --remove byte-identical (never referenced)"
+    assert File.symlink?(File.join(config_dir, "agents")),
+           "agents/ symlink must survive --remove (symlinks are never withdrawn)"
+    assert File.symlink?(File.join(config_dir, "AGENTS.md")),
+           "AGENTS.md symlink must survive --remove"
 
-    # A real file we did not generate survives --remove --prune and keeps the
-    # agents dir from being pruned (only our_generated? files are ever deleted).
-    FileUtils.mkdir_p(agents_dir)
-    foreign = File.join(agents_dir, "custom.md")
-    File.write(foreign, "keep me")
-    out, ok = run_cli("opencode", "--remove", "--prune")
+    # (B) Without the marker, --remove must leave opencode.json untouched.
+    run_cli("opencode")
+    before = File.read(config_path)
+    File.delete(File.join(config_dir, ".opencode_routing_generated"))
+    out, ok = run_cli("opencode", "--remove")
     assert ok, out
-    assert File.exist?(agents_dir), "agents dir with foreign content must not be pruned"
-    assert_equal "keep me", File.read(foreign)
-    snapshot.each do |path, content|
-      assert_equal content, File.read(path), "Store file #{path} must stay byte-identical across opencode remove"
-    end
-    assert_equal store_files, Dir.glob(File.join(AGENTS_DIR, "*.md")).sort,
-                 "Store file list must not change across opencode remove"
+    assert_equal before, File.read(config_path),
+                 "no marker => opencode.json is not managed by us and stays untouched"
   end
 
   def test_opencode_install_preserves_foreign_agents_symlink
@@ -423,9 +399,10 @@ class AgentsConfigTest < Minitest::Test
     assert_includes out, "foreign symlink present, not managed by us"
     assert File.symlink?(dest)
     assert_equal foreign_dir, File.expand_path(File.readlink(dest))
-    # The whole target is skipped conservatively: no generated files, no AGENTS.md link.
-    refute File.exist?(File.join(@home, ".config", "opencode", "AGENTS.md"))
-    assert_includes out, "foreign symlink present"
+    # Install is per-artifact: the foreign agents/ link is left alone, the
+    # remaining artifacts (AGENTS.md, routing config) still install.
+    assert File.symlink?(File.join(@home, ".config", "opencode", "AGENTS.md"))
+    assert File.file?(File.join(@home, ".config", "opencode", "opencode.json"))
   end
 
   def test_opencode_install_preserves_foreign_broken_agents_symlink
@@ -439,20 +416,167 @@ class AgentsConfigTest < Minitest::Test
     assert_equal "/nonexistent/foreign_agents", File.readlink(dest)
   end
 
+  def test_opencode_install_refuses_to_clobber_real_agents_dir
+    dest = File.join(@home, ".config", "opencode", "agents")
+    FileUtils.mkdir_p(dest)
+    foreign = File.join(dest, "custom.md")
+    File.write(foreign, "keep me")
+
+    out, ok = run_cli("opencode")
+    assert ok, out
+    assert_includes out, "real file/dir present, not a symlink"
+    assert File.directory?(dest)
+    refute File.symlink?(dest), "a real agents dir is never replaced by a symlink"
+    assert_equal "keep me", File.read(foreign)
+  end
+
   def test_opencode_install_is_idempotent
     run_cli("opencode")
-    agents_dir = File.join(@home, ".config", "opencode", "agents")
-    before = Dir.glob(File.join(agents_dir, "*.md")).sort.to_h { |p| [p, File.read(p)] }
-    assert before.size > 0, "opencode install should generate agent files"
+    config_path = File.join(@home, ".config", "opencode", "opencode.json")
+    marker = File.join(@home, ".config", "opencode", ".opencode_routing_generated")
+    before = File.read(config_path)
+    assert before.size > 0, "opencode install should emit a routing config"
 
     out2, ok = run_cli("opencode") # second run
     assert ok, out2
-    after = Dir.glob(File.join(agents_dir, "*.md")).sort.to_h { |p| [p, File.read(p)] }
-    assert_equal before.keys, after.keys, "file set must not change on idempotent re-run"
-    before.each do |path, content|
-      assert_equal content, after[path], "content of #{path} must not change on idempotent re-run"
-    end
+    assert_equal before, File.read(config_path),
+                 "opencode.json must stay byte-identical on idempotent re-run"
+    assert File.file?(marker), "marker must survive idempotent re-run"
+    refute_includes out2, "~ #{config_path}", "idempotent re-run must not rewrite the config"
     refute_includes out2, "! skip", "idempotent re-run must not warn about clobbering files"
+    refute_includes out2, "not managed by us", "our own generated config is ours, not foreign"
+  end
+
+  def test_opencode_install_preserves_foreign_opencode_json
+    config_path = File.join(@home, ".config", "opencode", "opencode.json")
+    marker = File.join(@home, ".config", "opencode", ".opencode_routing_generated")
+
+    # 1. Invalid JSON: must never be adopted or clobbered, no marker written.
+    File.write(config_path, "{ not valid json")
+    out, ok = run_cli("opencode")
+    assert ok, out
+    assert_includes out, "! skip #{config_path}: existing file is not managed by us"
+    assert_equal "{ not valid json", File.read(config_path)
+    refute opencode_config_owned?(config_path)
+    refute File.exist?(marker)
+
+    # 2. Valid JSON but foreign structure (e.g. the owner's full real config):
+    #    no adoption path exists; the file bytes are preserved verbatim.
+    foreign = JSON.dump("$schema" => "https://opencode.ai/config.json", "theme" => "custom")
+    File.write(config_path, foreign)
+    out, ok = run_cli("opencode")
+    assert ok, out
+    assert_includes out, "! skip #{config_path}: existing file is not managed by us"
+    assert_equal foreign, File.read(config_path)
+    refute opencode_config_owned?(config_path)
+    refute File.exist?(marker)
+    # The symlink artifacts still install (install is per-artifact, config is
+    # skipped conservatively).
+    assert File.symlink?(File.join(@home, ".config", "opencode", "agents"))
+  end
+
+  def test_opencode_invalid_or_missing_model_config_fails_before_symlinks_are_created
+    invalid_config = File.join(@home, "invalid-opencode.json")
+    File.write(invalid_config, JSON.dump("agent" => { "sprinter" => {} }))
+    agents_link = File.join(@home, ".config", "opencode", "agents")
+    File.symlink(AGENTS_DIR, agents_link)
+
+    error = assert_raises(RuntimeError) { opencode_agent_routing(invalid_config) }
+    assert_match(/agent\.cartographer\.model/, error.message,
+                 "the first store agent missing from the agent block must be named")
+    assert File.symlink?(agents_link)
+    assert_equal AGENTS_DIR, File.expand_path(File.readlink(agents_link))
+
+    assert_raises(Errno::ENOENT) { opencode_agent_routing(File.join(@home, "missing-opencode.json")) }
+    assert File.symlink?(agents_link)
+    assert_equal AGENTS_DIR, File.expand_path(File.readlink(agents_link))
+  end
+
+  def test_opencode_cli_invalid_routing_config_creates_no_target_paths
+    cases = {
+      "invalid" => "{ not json",
+      "incomplete" => JSON.dump("agent" => { "sprinter" => {} }),
+      "missing" => nil,
+    }
+
+    cases.each do |label, config|
+      sandbox = Dir.mktmpdir("agents_config_#{label}")
+      repo = File.join(sandbox, "repo")
+      home = File.join(sandbox, "home")
+      FileUtils.cp_r(STORE, repo)
+      config_path = File.join(repo, "opencode.json")
+      config.nil? ? File.delete(config_path) : File.write(config_path, config)
+
+      out, ok = run_cli_at(File.join(repo, "bin", "agents_config"), home, "opencode")
+      refute ok, "#{label} config unexpectedly succeeded: #{out}"
+      refute File.exist?(File.join(home, ".config", "opencode", "agents")),
+             "#{label} config created the opencode agents symlink"
+      refute File.exist?(File.join(home, ".config", "opencode", "AGENTS.md")),
+             "#{label} config created opencode rules"
+      refute File.exist?(File.join(home, ".config", "opencode", "opencode.json")),
+             "#{label} config created opencode.json"
+      refute File.exist?(File.join(home, ".config", "opencode", ".opencode_routing_generated")),
+             "#{label} config created the routing marker"
+    ensure
+      FileUtils.rm_rf(sandbox) if sandbox
+    end
+  end
+
+  def test_opencode_cli_emits_canonical_ids_for_host_without_hosts_entry
+    sandbox = Dir.mktmpdir("agents_config_unmapped_host")
+    repo = File.join(sandbox, "repo")
+    home = File.join(sandbox, "home")
+    FileUtils.cp_r(STORE, repo)
+    # Empty hosts map: no machine is mapped, so the emitted ids must be the
+    # canonical store ids byte-identically, cloud markers included (the exact
+    # regression PR #3 caused for the Mac).
+    File.write(File.join(repo, "hosts.json"), JSON.dump({}))
+
+    out, ok = run_cli_at(File.join(repo, "bin", "agents_config"), home, "opencode")
+    assert ok, out
+    config = JSON.parse(File.read(File.join(home, ".config", "opencode", "opencode.json")))
+    assert_equal ["agent"], config.keys
+    assert File.file?(File.join(home, ".config", "opencode", ".opencode_routing_generated"))
+    canon = JSON.parse(File.read(File.join(repo, "opencode.json"))).fetch("agent")
+    canon.each do |name, entry|
+      model = entry.is_a?(Hash) ? entry["model"] : nil
+      next unless model.is_a?(String) && !model.strip.empty?
+      assert_equal model, config.fetch("agent").fetch(name).fetch("model"),
+                   "unmapped host must get the canonical id with its cloud marker intact"
+    end
+  ensure
+    FileUtils.rm_rf(sandbox) if sandbox
+  end
+
+  def test_opencode_cli_translates_ids_for_mapped_hostname
+    sandbox = Dir.mktmpdir("agents_config_mapped_host")
+    repo = File.join(sandbox, "repo")
+    home = File.join(sandbox, "home")
+    FileUtils.cp_r(STORE, repo)
+    # Map the hostname of THIS test process: the CLI subprocess inherits it, so
+    # the emitted ids must be the host-config-resolved ones.
+    hostname = Socket.gethostname
+    sandbox_hosts = { hostname => { "provider" => "ollama-cloud", "strip_cloud_marker" => true } }
+    File.write(File.join(repo, "hosts.json"), JSON.dump(sandbox_hosts))
+
+    out, ok = run_cli_at(File.join(repo, "bin", "agents_config"), home, "opencode")
+    assert ok, out
+    config = JSON.parse(File.read(File.join(home, ".config", "opencode", "opencode.json")))
+    assert_equal ["agent"], config.keys
+    assert File.file?(File.join(home, ".config", "opencode", ".opencode_routing_generated"))
+    canon = JSON.parse(File.read(File.join(repo, "opencode.json"))).fetch("agent")
+    host_config = hosts_config_for(hostname, sandbox_hosts)
+    canon.each do |name, entry|
+      model = entry.is_a?(Hash) ? entry["model"] : nil
+      next unless model.is_a?(String) && !model.strip.empty?
+      expected = opencode_model_id(model, host_config)
+      assert_equal expected, config.fetch("agent").fetch(name).fetch("model"),
+                   "mapped host #{hostname.inspect} must get translated ids"
+      assert expected.start_with?("ollama-cloud/"),
+             "provider swap must be observable in the emitted id"
+    end
+  ensure
+    FileUtils.rm_rf(sandbox) if sandbox
   end
 
   def test_pi_install_generates_frontmatter_first_agents_with_opencode_models
@@ -833,41 +957,85 @@ class AgentsConfigTest < Minitest::Test
     assert_includes codex_rendered, '\\\\d+'
   end
 
-  def test_render_generated_agent_for_opencode_with_escapes
-    src = File.join(@home, "escape_me.md")
-    File.write(src, <<~MD)
-      ---
-      name: escaper
-      description: "Handles colons: and, quotes in description"
-      mode: subagent
-      permission:
-        edit: deny
-      ---
-
-      Body here.
-    MD
-    rendered = render_generated_agent(src, "escaper", format: :opencode, model: "ollama-cloud/glm-5.3-flash")
-    fm = YAML.safe_load(rendered[/\A---\n(.*?)\n---\n/m])
-    assert_equal({ "name" => "escaper", "description" => "Handles colons: and, quotes in description", "mode" => "subagent", "model" => "ollama-cloud/glm-5.3-flash" }, fm)
-    assert_includes rendered, "Body here."
-    assert_includes rendered, "# agents_config:generated"
-    refute_includes rendered, "permission"
-  end
-
   def test_opencode_model_id_translation
-    # Ticket-pinned ticket examples from opencode.json
-    assert_equal "ollama-cloud/deepseek-v4.1-flash:1017", opencode_model_id("ollama/deepseek-v4.1-flash:1017-cloud")
-    assert_equal "ollama-cloud/glm-5.3-flash", opencode_model_id("ollama/glm-5.3-flash:cloud")
-    assert_equal "ollama-cloud/glm-5.3", opencode_model_id("ollama/glm-5.3:cloud")
-    assert_equal "ollama-cloud/kimi-k3", opencode_model_id("ollama/kimi-k3:cloud")
-    assert_equal "ollama-cloud/mistral-large-4", opencode_model_id("ollama/mistral-large-4:cloud")
-    # Ids without a trailing cloud marker pass through unchanged.
-    assert_equal "ollama-cloud/qwen3:32b", opencode_model_id("ollama/qwen3:32b")
+    hosts = { "vectra-server" => { "provider" => "ollama-cloud", "strip_cloud_marker" => true } }
+    # Ticket-pinned examples from opencode.json, resolved for a mapped host.
+    assert_equal "ollama-cloud/deepseek-v4.1-flash:1017", opencode_model_id("ollama/deepseek-v4.1-flash:1017-cloud", nil, hosts: hosts, hostname: "vectra-server")
+    assert_equal "ollama-cloud/glm-5.3-flash", opencode_model_id("ollama/glm-5.3-flash:cloud", nil, hosts: hosts, hostname: "vectra-server")
+    assert_equal "ollama-cloud/glm-5.3", opencode_model_id("ollama/glm-5.3:cloud", nil, hosts: hosts, hostname: "vectra-server")
+    assert_equal "ollama-cloud/kimi-k3", opencode_model_id("ollama/kimi-k3:cloud", nil, hosts: hosts, hostname: "vectra-server")
+    assert_equal "ollama-cloud/mistral-large-4", opencode_model_id("ollama/mistral-large-4:cloud", nil, hosts: hosts, hostname: "vectra-server")
+    # Ids without a trailing cloud marker keep their id under the swapped provider.
+    assert_equal "ollama-cloud/qwen3:32b", opencode_model_id("ollama/qwen3:32b", nil, hosts: hosts, hostname: "vectra-server")
 
-    # Fail-fast on malformed input.
+    # Fail-fast on malformed input, regardless of host config.
     assert_raises(ArgumentError, "missing provider prefix must raise") { opencode_model_id("deepseek-v4.1-flash:1017-cloud") }
     assert_raises(ArgumentError, "empty id must raise") { opencode_model_id("ollama/") }
     assert_raises(ArgumentError, "empty input must raise") { opencode_model_id("") }
+  end
+
+  def test_opencode_model_id_passthrough_for_hosts_without_entries
+    cloud = "ollama/deepseek-v4.1-flash:1017-cloud"
+    # Hostname absent from a provided map: canonical id byte-identical, marker kept.
+    assert_equal cloud, opencode_model_id(cloud, nil, hosts: {}, hostname: "some-mac")
+    # Hostname absent from the real committed hosts.json: same passthrough.
+    assert_equal cloud, opencode_model_id(cloud, nil, hostname: "no-such-host-in-the-map")
+    # A mapped host without strip flag keeps the marker but swaps the provider.
+    hosts = { "other-server" => { "provider" => "ollama-cloud" } }
+    assert_equal "ollama-cloud/deepseek-v4.1-flash:1017-cloud", opencode_model_id(cloud, nil, hosts: hosts, hostname: "other-server")
+  end
+
+  def test_load_hosts_config_failsafe_on_missing_or_invalid_file
+    Dir.mktmpdir do |dir|
+      capture_io do
+        # Missing file.
+        assert_nil load_hosts_config(File.join(dir, "missing_hosts.json"))
+        # Invalid JSON.
+        File.write(File.join(dir, "hosts.json"), "{ nope")
+        assert_nil load_hosts_config(File.join(dir, "hosts.json"))
+        # Valid JSON that is not an object.
+        File.write(File.join(dir, "hosts.json"), "[1, 2]")
+        assert_nil load_hosts_config(File.join(dir, "hosts.json"))
+      end
+    end
+
+    hosts = { "vectra-server" => { "provider" => "ollama-cloud", "strip_cloud_marker" => true } }
+    assert_equal hosts, load_hosts_config(HOSTS_FILE)
+  end
+
+  def test_hosts_config_for_resolves_entries_and_defaults_to_passthrough
+    hosts = { "vectra-server" => { "provider" => "ollama-cloud", "strip_cloud_marker" => true } }
+    assert_equal hosts["vectra-server"], hosts_config_for("vectra-server", hosts)
+    assert_nil hosts_config_for("some-mac", hosts)
+    assert_nil hosts_config_for("", hosts)
+    capture_io do
+      assert_nil hosts_config_for("vectra-server", JSON.dump({ "vectra-server" => 5 }))
+      # Real-file default path for a hostname with no entry: nil => passthrough
+      # (the commented plan variant — nil for "vectra-server" itself — is the
+      # same invocation the last line pins to the committed map's entry, so it
+      # cannot be nil while hosts.json is valid).
+      assert_nil hosts_config_for("no-such-host-passed-explicitly", nil)
+    end
+    assert_equal hosts["vectra-server"], hosts_config_for("vectra-server")
+  end
+
+  def test_opencode_agent_routing_resolves_ids_per_host
+    canon = JSON.parse(File.read(OPENCODE_CONFIG)).fetch("agent")
+    hosts = { "vectra-server" => { "provider" => "ollama-cloud", "strip_cloud_marker" => true } }
+
+    routing = opencode_agent_routing(OPENCODE_CONFIG, "vectra-server", hosts)
+    canon.each do |name, entry|
+      model = entry.is_a?(Hash) ? entry["model"] : nil
+      next unless model.is_a?(String) && !model.strip.empty?
+      assert_equal opencode_model_id(model, hosts["vectra-server"]), routing.fetch(name).fetch("model")
+    end
+
+    unmapped = opencode_agent_routing(OPENCODE_CONFIG, "no-such-host-in-the-map")
+    canon.each do |name, entry|
+      model = entry.is_a?(Hash) ? entry["model"] : nil
+      next unless model.is_a?(String) && !model.strip.empty?
+      assert_equal model, unmapped.fetch(name).fetch("model")
+    end
   end
 
   def test_parse_agent_file_handles_non_hash_frontmatter
@@ -888,11 +1056,13 @@ class AgentsConfigTest < Minitest::Test
     assert ok, out
     assert File.exist?(File.join(@home, ".gemini", "config", "agents", "sprinter.md"))
     assert File.exist?(File.join(@home, ".gemini", "config", "AGENTS.md"))
-    assert File.exist?(File.join(@home, ".config", "opencode", "agents"))
-    assert File.directory?(File.join(@home, ".config", "opencode", "agents"))
-    refute File.symlink?(File.join(@home, ".config", "opencode", "agents"))
-    assert File.file?(File.join(@home, ".config", "opencode", "agents", "sprinter.md"))
+    assert File.symlink?(File.join(@home, ".config", "opencode", "agents"))
+    assert_equal AGENTS_DIR,
+                 File.expand_path(File.readlink(File.join(@home, ".config", "opencode", "agents")))
     assert File.exist?(File.join(@home, ".config", "opencode", "AGENTS.md"))
+    routing = JSON.parse(File.read(File.join(@home, ".config", "opencode", "opencode.json")))
+    assert routing.key?("agent"), "opencode install must emit the routing config"
+    assert File.exist?(File.join(@home, ".config", "opencode", ".opencode_routing_generated"))
     assert File.exist?(File.join(@home, ".cursor", "agents", "sprinter.md"))
     assert File.exist?(File.join(@home, ".cursor", "AGENTS.md"))
     assert File.exist?(File.join(@home, ".codex", "agents", "sprinter.toml"))
@@ -906,7 +1076,13 @@ class AgentsConfigTest < Minitest::Test
     out, ok = run_cli("--all", "--remove", "--prune")
     assert ok, out
     refute File.exist?(File.join(@home, ".gemini", "config", "agents"))
-    refute File.exist?(File.join(@home, ".config", "opencode", "agents"))
+    # opencode differs from other targets by design: --remove is routing-only,
+    # so the agents/ + AGENTS.md symlinks are deliberately left in place and the
+    # config dir is never pruned (the owner's opencode.jsonc may live there).
+    assert File.symlink?(File.join(@home, ".config", "opencode", "agents"))
+    assert File.symlink?(File.join(@home, ".config", "opencode", "AGENTS.md"))
+    refute File.exist?(File.join(@home, ".config", "opencode", "opencode.json"))
+    refute File.exist?(File.join(@home, ".config", "opencode", ".opencode_routing_generated"))
     refute File.exist?(File.join(@home, ".cursor", "agents"))
     refute File.exist?(File.join(@home, ".codex", "agents"))
     refute File.exist?(File.join(@home, ".pi", "agent", "agents"))

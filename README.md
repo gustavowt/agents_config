@@ -56,20 +56,22 @@ ln -sf ~/agents_config/bin/agents_config ~/.local/bin/agents_config
 | Target | Config directory | Install behavior |
 |--------|------------------|------------------|
 | `gemini` | `~/.gemini/config` | Symlink `AGENTS.md`; generate `agents/<name>.md` with Gemini frontmatter (`name`, `description`, `model`, `subagent`) |
-| `opencode` | `~/.config/opencode` | Symlink `AGENTS.md`; generate `agents/<name>.md` with per-agent frontmatter (`name`, `description`, `mode`, `model`), models translated from `opencode.json` (pi `ollama/<id>…cloud` ids → opencode-native `ollama-cloud/<id>`) |
+| `opencode` | `~/.config/opencode` | Symlink whole `agents/` directory + `AGENTS.md`; emit `opencode.json` with per-agent model routing |
 | `cursor` | `~/.cursor` | Symlink `AGENTS.md`; generate `agents/<name>.md` with Cursor frontmatter (`name`, `description`) |
 | `codex` | `~/.codex` | Symlink `AGENTS.md`; generate `agents/<name>.toml` with TOML fields (`name`, `description`, `developer_instructions`) |
 | `pi` | `~/.pi/agent` | Symlink `AGENTS.md`; generate frontmatter-first `agents/<name>.md` for the optional pi-sub-agent extension, with each model from `opencode.json` |
 
 ### Symlink vs generated
 
-- **OpenCode** writes generated files marked with `# agents_config:generated`
-  (frontmatter first, like Pi), with per-agent frontmatter (`name`, `description`,
-  `mode`, `model`) where the model is translated from `opencode.json` (pi
-  `ollama/<id>…cloud` ids become opencode-native `ollama-cloud/<id>`).
-  **Re-run install after editing** canonical files; legacy installs that
-  symlinked the whole `agents/` directory are migrated to a real directory on
-  the next install.
+- **OpenCode** symlinks the whole `agents/` directory and `AGENTS.md` (no
+  per-agent files). The installer emits a managed `opencode.json` containing
+  only the `agent` block, with model ids translated from the canonical
+  [`opencode.json`](opencode.json) at install time (pi `ollama/<id>…cloud` ids
+  become opencode-native `ollama-cloud/<id>`). Ownership is marked by
+  `.opencode_routing_generated` next to it; `--remove` withdraws ONLY that file
+  and the marker (symlinks are kept). A foreign or hand-written `opencode.json`
+  is never clobbered — it is skipped with a warning; `opencode.jsonc` is never
+  referenced.
 - **Gemini, Cursor, Codex, and Pi** write generated files marked with
   `# agents_config:generated`. **Re-run install after editing**
   canonical `agents/*.md` to regenerate derived files. Pi places its marker just
@@ -89,6 +91,31 @@ OpenCode permissions, plugins, and MCP configuration.
 Pi's `agents/` directory is installer-managed and contains generated Markdown
 plus an ownership marker. Do not hand-edit these files; edit canonical agents or
 `opencode.json`, then rerun the installer.
+
+### Model-id routing per machine
+
+Model ids in the emitted `agent` block are resolved per machine from
+`hosts.json` in the store root:
+
+```json
+{
+  "vectra-server": {
+    "provider": "ollama-cloud",
+    "strip_cloud_marker": true
+  }
+}
+```
+
+- A hostname absent from the map — the default — is passthrough: canonical
+  `ollama/<id>` ids are emitted unchanged, `-cloud` / `:cloud` markers included.
+- `provider`, when set, swaps a leading `ollama/` for that provider.
+- `strip_cloud_marker` removes a trailing `-cloud` / `:cloud` marker.
+- A missing or unparseable `hosts.json` is also passthrough (with a warning);
+  the installer never fails because of it.
+- Known hosts: `vectra-server` runs provider `ollama-cloud` (direct ollama.com),
+  so store ids are provider-swapped with the cloud marker stripped; the owner's
+  Mac runs a single `ollama` provider against a LAN server whose ids are the
+  canonical ones, so it needs no entry.
 
 ## Day-to-day workflow
 
@@ -111,9 +138,10 @@ Agent files use YAML frontmatter. Common keys:
 
 The canonical frontmatter does not set a generic `model`: that would affect
 Gemini. Pi's `model` is injected only into its generated files from
-[`opencode.json`](opencode.json). OpenCode's generated files likewise carry a
-per-agent `model` injected from `opencode.json`, translated from the pi format
-`ollama/<id>[-:]cloud` to the opencode-native `ollama-cloud/<id>`.
+[`opencode.json`](opencode.json). OpenCode resolves per-agent models from the
+`agent` block of its emitted `opencode.json` (verified on opencode 1.19.4), with
+ids translated from the canonical map at install time — not from agent-file
+frontmatter.
 
 Example canonical file:
 
