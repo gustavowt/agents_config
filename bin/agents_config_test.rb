@@ -358,7 +358,14 @@ class AgentsConfigTest < Minitest::Test
 
     regenerated = JSON.parse(File.read(models_path))
     model_ids = regenerated.fetch("providers").fetch("ollama").fetch("models").map { |m| m.fetch("id") }.sort
-    assert_equal %w[deepseek-v4-flash:0731-cloud glm-5.2:cloud kimi-k3:cloud], model_ids
+    # Derive from the checked-in opencode.json (same precedent as the
+    # frontmatter-first pi test) so this does not rot on config bumps.
+    agent_cfg = JSON.parse(File.read(File.join(STORE, "opencode.json"))).fetch("agent")
+    expected_ids = Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.map do |path|
+      name = File.basename(path, ".md")
+      agent_cfg.fetch(name).fetch("model").split("/", 2).fetch(1)
+    end.uniq.sort
+    assert_equal expected_ids, model_ids
   end
 
   def test_pi_install_preserves_foreign_or_invalid_models_json
