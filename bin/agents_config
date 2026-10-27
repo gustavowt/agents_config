@@ -2,15 +2,23 @@
 # frozen_string_literal: true
 #
 # agents_config - install/clean the shared agents store into a tool's global
-# config. Two artifact kinds:
-#   :symlink   - link a shared file/dir into the tool config (read-through)
-#   :generate  - write a tool-specific file with transformed frontmatter
+# config. Artifact kinds:
+#   :symlink         - link a shared file/dir into the tool config (read-through)
+#   :generate        - write a tool-specific file with transformed frontmatter
+#   :pi_models       - derive Pi's models.json from the canonical opencode.json
+#   :opencode_config - derive opencode's routing opencode.json (agent block only)
 #
 # Single source of truth: the shared store at ~/agents_config. Canonical agent
 # files live at ~/agents_config/agents/<name>.md and are NEVER edited by this
 # tool. For tools that need a different frontmatter schema (e.g. agy, cursor,
 # codex), this installer generates a derived file in the tool's config dir.
 # Re-run after editing a canonical file to regenerate derived files.
+#
+# The opencode target is symlinks + one routing file: agents/ and AGENTS.md are
+# direct symlinks into the store, and a minimal opencode.json ({"agent": {...}},
+# opencode-native model ids) is emitted beside the .opencode_routing_generated
+# marker. --remove withdraws only that routing file + marker; the symlinks are
+# never touched.
 #
 # Usage:
 #   agents_config <target>           install/repair artifacts for <target>
@@ -38,6 +46,7 @@ OPENCODE_CONFIG = File.join(STORE, "opencode.json")
 GENERATED_MARKER = "agents_config:generated"
 PI_AGENTS_DIR_MARKER = ".agents_config_generated"
 PI_MODELS_MARKER = ".models_config_generated"
+OPENCODE_CONFIG_MARKER = ".opencode_routing_generated"
 
 GEMINI_AGENT_MODELS = {
   "orchestrator"              => "gemini-2.5-pro",
@@ -61,9 +70,10 @@ GEMINI_AGENT_MODELS = {
 }.freeze
 
 # An Artifact is one thing the installer places in a tool's config dir.
-#   kind:  :symlink | :generate
-#   src:   canonical source (shared file/dir) for :symlink, or the canonical
-#          agent .md whose frontmatter+body is transformed for :generate
+#   kind:  :symlink | :generate | :pi_models | :opencode_config
+#   src:   canonical source (shared file/dir) for :symlink, the canonical agent
+#          .md whose frontmatter+body is transformed for :generate, or the
+#          canonical opencode.json for :pi_models / :opencode_config
 #   dest:  absolute destination path in the tool config
 Artifact = Struct.new(:kind, :src, :dest, :opts) do
   def symlink?; kind == :symlink; end
@@ -84,6 +94,10 @@ Target = Struct.new(:name, :config_root) do
 
   def models_dest
     File.join(config_root, "models.json")
+  end
+
+  def config_dest
+    File.join(config_root, "opencode.json")
   end
 end
 
@@ -108,20 +122,19 @@ def build_gemini(target)
 end
 
 # Build artifacts for the opencode target.
+# - The whole shared agents/ dir is one symlink (no per-agent generation).
 # - AGENTS.md is symlinked (global instructions).
-# - Each agent is GENERATED as a flat agents/<name>.md file with opencode
-#   frontmatter (name, description, mode, model). Models come from the checked-in
-#   opencode.json (pi-format ollama ids) and are translated to opencode-native
-#   form at build time, so a malformed id fails before any disk write.
+# - opencode.json is emitted with ONLY an "agent" block: the entries of the
+#   canonical opencode.json agent block that carry a model, ids translated to
+#   opencode-native form (ollama/<id>[...-cloud] -> ollama-cloud/<id>), so a
+#   malformed id fails before any disk write. Every store agent must be present
+#   (fail fast, mirroring build_pi).
 def build_opencode(target)
-  models = pi_agent_models
+  routing = opencode_agent_routing
   arts = []
+  arts << Artifact.new(:symlink, AGENTS_DIR, target.agents_dest_dir, {})
   arts << Artifact.new(:symlink, RULES_FILE, target.rules_dest, {}) if File.exist?(RULES_FILE)
-  Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.each do |src|
-    name = File.basename(src, ".md")
-    arts << Artifact.new(:generate, src, File.join(target.agents_dest_dir, "#{name}.md"),
-                         { name: name, format: :opencode, model: opencode_model_id(models.fetch(name)) })
-  end
+  arts << Artifact.new(:opencode_config, OPENCODE_CONFIG, target.config_dest, { routing: routing })
   arts
 end
 
@@ -230,6 +243,36 @@ def pi_agent_models(config_path = OPENCODE_CONFIG)
     end
     [name, model]
   end
+rescue JSON::ParserError => e
+  raise "Invalid OpenCode config #{config_path}: #{e.message}"
+end
+
+# Routing map for the emitted ~/.config/opencode/opencode.json: keep only the
+# canonical agent block entries that carry a model (disable-only entries like
+# explore/build are not routing), translate each id to opencode-native form,
+# and require every store agent to be present with a non-empty string model
+# (fail fast before any disk write, mirroring pi_agent_models).
+def opencode_agent_routing(config_path = OPENCODE_CONFIG)
+  config = JSON.parse(File.read(config_path))
+  agents = config["agent"]
+  raise "Invalid OpenCode config #{config_path}: expected an agent object" unless agents.is_a?(Hash)
+
+  Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.each do |src|
+    name = File.basename(src, ".md")
+    entry = agents[name]
+    model = entry.is_a?(Hash) ? entry["model"] : nil
+    unless model.is_a?(String) && !model.strip.empty?
+      raise "Invalid OpenCode config #{config_path}: agent.#{name}.model must be a non-empty string"
+    end
+  end
+
+  routing = {}
+  agents.each do |name, entry|
+    model = entry.is_a?(Hash) ? entry["model"] : nil
+    next unless model.is_a?(String) && !model.strip.empty?
+    routing[name] = { "model" => opencode_model_id(model) }
+  end
+  routing
 rescue JSON::ParserError => e
   raise "Invalid OpenCode config #{config_path}: #{e.message}"
 end
@@ -370,28 +413,6 @@ def render_pi_agent(src, name, model)
   FILE
 end
 
-# OpenCode reads per-agent frontmatter (name/description/mode/model). Like Pi,
-# frontmatter must be the first content in the file, so the marker follows its
-# closing delimiter; our_generated? recognizes this form. Only the
-# opencode-supported keys are emitted; other canonical keys (e.g. permission)
-# are dropped.
-def render_opencode_agent(src, name, model)
-  canonical_fm, body = parse_agent_file(src)
-  opencode_fm = {
-    "name"        => canonical_fm.fetch("name")        { raise "agents/#{name}.md: missing name for opencode generation" },
-    "description" => canonical_fm.fetch("description") { raise "agents/#{name}.md: missing description for opencode generation" },
-    "mode"        => canonical_fm.fetch("mode")        { raise "agents/#{name}.md: missing mode for opencode generation" },
-    "model"       => model
-  }
-  yaml_str = YAML.dump(opencode_fm).sub(/\A---\n/, "")
-  <<~FILE
-    ---
-    #{yaml_str}---
-    # #{GENERATED_MARKER}
-    #{body}
-  FILE
-end
-
 # Render a generated agent file for Codex: marker comment + TOML fields.
 def render_codex_agent(src, name)
   canonical_fm, body = parse_agent_file(src)
@@ -416,7 +437,6 @@ def render_generated_agent(src, name, format_arg = nil, format: nil, model: nil)
   when :cursor then render_cursor_agent(src, name)
   when :codex  then render_codex_agent(src, name)
   when :pi     then render_pi_agent(src, name, model || raise(ArgumentError, "Pi model is required"))
-  when :opencode then render_opencode_agent(src, name, model || raise(ArgumentError, "OpenCode model is required"))
   else
     raise ArgumentError, "Unknown format: #{fmt}"
   end
@@ -475,6 +495,18 @@ rescue
   false
 end
 
+# The emitted routing opencode.json is "ours" only when its sidecar marker
+# (written at the same time as the file) is present and intact. A real
+# opencode.json without the marker is never ours: it may be the owner's real
+# full opencode config, so there is no adoption path.
+def opencode_config_owned?(dest)
+  marker = File.join(File.dirname(dest), OPENCODE_CONFIG_MARKER)
+  File.file?(dest) && File.file?(marker) &&
+    File.read(marker).start_with?("# #{GENERATED_MARKER}")
+rescue
+  false
+end
+
 def render_pi_models(ollama)
   JSON.pretty_generate(
     "providers" => {
@@ -486,6 +518,12 @@ def render_pi_models(ollama)
       },
     },
   ) + "\n"
+end
+
+# The emitted routing config carries ONLY {"agent": {...}} — never the owner's
+# other top-level opencode settings ($schema, mcp, provider, ...).
+def render_opencode_config(routing)
+  JSON.pretty_generate("agent" => routing) + "\n"
 end
 
 def legacy_pi_models?(dest)
@@ -522,6 +560,25 @@ def install_pi_models(art)
   true
 end
 
+# Unlike the pi models side, there is no adoption path: a real opencode.json
+# without our marker may be the owner's full config, so it is left alone (and
+# the marker is not written, keeping ownership and file always in sync).
+def install_opencode_config(art)
+  dest = art.dest
+  if (File.exist?(dest) || File.symlink?(dest)) && !opencode_config_owned?(dest)
+    warn "  ! skip #{dest}: existing file is not managed by us"
+    return false
+  end
+  rendered = render_opencode_config(art.opts.fetch(:routing))
+  return true if opencode_config_owned?(dest) && File.read(dest) == rendered
+  File.delete(dest) if File.exist?(dest) || File.symlink?(dest)
+  FileUtils.mkdir_p(File.dirname(dest))
+  File.write(dest, rendered)
+  File.write(File.join(File.dirname(dest), OPENCODE_CONFIG_MARKER), "# #{GENERATED_MARKER}\n")
+  puts "  ~ #{dest} (generated)"
+  true
+end
+
 def remove_symlink(art)
   return false unless our_symlink?(art.dest)
   File.delete(art.dest)
@@ -541,6 +598,20 @@ def remove_pi_models(art)
   File.delete(art.dest)
   File.delete(File.join(File.dirname(art.dest), PI_MODELS_MARKER))
   puts "  - #{art.dest} (generated)"
+  true
+end
+
+# Routing-file-only removal: the emitted opencode.json is deleted only when we
+# own it (marker present); the marker itself is always withdrawn when present,
+# so a stale sidecar can never outlive this --remove. The agents/ and AGENTS.md
+# symlinks are handled elsewhere and are deliberately never removed here.
+def remove_opencode_config(art)
+  marker = File.join(File.dirname(art.dest), OPENCODE_CONFIG_MARKER)
+  if opencode_config_owned?(art.dest)
+    File.delete(art.dest)
+    puts "  - #{art.dest} (generated)"
+  end
+  File.delete(marker) if File.exist?(marker)
   true
 end
 
@@ -587,27 +658,6 @@ def prepare_pi_agents_dir(target)
   true
 end
 
-# OpenCode generates flat agent files in <config>/agents. The previous release
-# symlinked the whole agents/ directory; when that is one of our symlinks,
-# replace it with a real directory so :generate never writes through the store.
-def prepare_opencode_agents_dir(target)
-  dir = target.agents_dest_dir
-  if File.symlink?(dir)
-    if our_symlink?(dir)
-      File.delete(dir)
-      puts "  - #{dir} (old opencode layout)"
-    else
-      warn "  ! skip #{dir}: foreign symlink present, not managed by us"
-      return false
-    end
-  elsif File.exist?(dir) && !File.directory?(dir)
-    warn "  ! skip #{dir}: real file present, not a directory"
-    return false
-  end
-  FileUtils.mkdir_p(dir)
-  true
-end
-
 def pi_agents_dir_owned?(dir)
   File.file?(File.join(dir, PI_AGENTS_DIR_MARKER)) &&
     File.read(File.join(dir, PI_AGENTS_DIR_MARKER)).start_with?("# #{GENERATED_MARKER}")
@@ -619,18 +669,19 @@ end
 
 def install_target(target)
   puts "Install: #{target.name} (#{target.config_root})"
-  # Build first: Pi validates its checked-in OpenCode model map here. This keeps
-  # a malformed or incomplete configuration from creating any target artifacts.
+  # Build first: the pi and opencode targets validate their checked-in OpenCode
+  # model maps here. This keeps a malformed or incomplete configuration from
+  # creating any target artifacts (no symlink, no routing file, no marker).
   arts = BUILDERS[target.name].call(target)
   FileUtils.mkdir_p(target.config_root)
   return unless target.name != "pi" || prepare_pi_agents_dir(target)
-  return unless target.name != "opencode" || prepare_opencode_agents_dir(target)
   migrate_old_gemini_layout(target) if target.name == "gemini"
   arts.each do |art|
     case art.kind
     when :symlink then install_symlink(art)
     when :generate then install_generated(art)
     when :pi_models then install_pi_models(art)
+    when :opencode_config then install_opencode_config(art)
     end
   end
 end
@@ -638,18 +689,15 @@ end
 def remove_target(target, prune: false)
   puts "Remove: #{target.name}"
   arts = BUILDERS[target.name].call(target)
-  # Also clean the old whole-dir agents symlink (opencode migration in reverse),
-  # mirroring the gemini old-layout cleanup.
-  if target.name == "opencode" && our_symlink?(target.agents_dest_dir)
-    legacy = target.agents_dest_dir
-    File.delete(legacy)
-    puts "  - #{legacy} (old opencode layout)"
-  end
   arts.each do |art|
+    # opencode --remove is routing-file-only: the agents/ and AGENTS.md symlinks
+    # are NOT withdrawn; only the routing file + marker are ever removed.
+    next if target.name == "opencode" && art.symlink?
     case art.kind
     when :symlink then remove_symlink(art)
     when :generate then remove_generated(art)
     when :pi_models then remove_pi_models(art)
+    when :opencode_config then remove_opencode_config(art)
     end
   end
   # Also clean any leftover old-layout symlinks (gemini migration in reverse).
@@ -657,6 +705,9 @@ def remove_target(target, prune: false)
     migrate_old_gemini_layout(target)
   end
   return unless prune
+  # opencode never prunes: its config dir keeps our symlinks and possibly the
+  # owner's real opencode.jsonc, so there is nothing of ours left to clean.
+  return if target.name == "opencode"
   if target.name == "pi" && pi_agents_dir_owned?(target.agents_dest_dir)
     entries = Dir.children(target.agents_dest_dir) - [PI_AGENTS_DIR_MARKER]
     File.delete(File.join(target.agents_dest_dir, PI_AGENTS_DIR_MARKER)) if entries.empty?
