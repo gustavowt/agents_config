@@ -34,12 +34,15 @@
 require "fileutils"
 require "json"
 require "optparse"
+require "socket"
 require "yaml"
 
 STORE = File.expand_path("..", __dir__)           # /home/guga/agents_config
 AGENTS_DIR = File.join(STORE, "agents")           # .../agents_config/agents
 RULES_FILE = File.join(STORE, "AGENTS.md")        # .../agents_config/AGENTS.md
 OPENCODE_CONFIG = File.join(STORE, "opencode.json")
+# Per-machine model-id layout: hostname => { "provider" => "...", "strip_cloud_marker" => true }.
+HOSTS_FILE = File.join(STORE, "hosts.json")
 
 # Marker comment used to identify generated output (idempotent regeneration,
 # safe removal, and clobber protection). Pi places it after frontmatter.
@@ -247,12 +250,41 @@ rescue JSON::ParserError => e
   raise "Invalid OpenCode config #{config_path}: #{e.message}"
 end
 
+# Per-machine model-id layout map (hosts.json): hostname => settings hash. A
+# missing or unparseable file is a warn-and-passthrough, never a crash.
+def load_hosts_config(path = HOSTS_FILE)
+  hosts = JSON.parse(File.read(path))
+  unless hosts.is_a?(Hash)
+    warn "! #{path}: expected a JSON object mapping hostnames, using passthrough model ids"
+    return nil
+  end
+  hosts
+rescue SystemCallError, JSON::ParserError => e
+  warn "! #{path}: #{e.class.name.split("::").last} (#{e.message}), using passthrough model ids"
+  nil
+end
+
+# Resolve the hosts.json entry for one machine (default: this machine's
+# hostname). nil result => passthrough: canonical ids are emitted unchanged.
+def hosts_config_for(hostname = nil, hosts = nil)
+  hostname = (Socket.gethostname rescue "") if hostname.nil?
+  hosts ||= load_hosts_config
+  return nil unless hosts.is_a?(Hash) && hostname.is_a?(String) && !hostname.empty?
+  return nil unless hosts.key?(hostname)
+
+  entry = hosts[hostname]
+  return entry if entry.is_a?(Hash)
+
+  warn "! #{HOSTS_FILE}: entry for #{hostname} is not an object, ignoring it (passthrough)"
+  nil
+end
+
 # Routing map for the emitted ~/.config/opencode/opencode.json: keep only the
 # canonical agent block entries that carry a model (disable-only entries like
 # explore/build are not routing), translate each id to opencode-native form,
 # and require every store agent to be present with a non-empty string model
 # (fail fast before any disk write, mirroring pi_agent_models).
-def opencode_agent_routing(config_path = OPENCODE_CONFIG)
+def opencode_agent_routing(config_path = OPENCODE_CONFIG, hostname = nil, hosts = nil)
   config = JSON.parse(File.read(config_path))
   agents = config["agent"]
   raise "Invalid OpenCode config #{config_path}: expected an agent object" unless agents.is_a?(Hash)
@@ -266,11 +298,15 @@ def opencode_agent_routing(config_path = OPENCODE_CONFIG)
     end
   end
 
+  host_config = hosts_config_for(hostname, hosts)
   routing = {}
   agents.each do |name, entry|
     model = entry.is_a?(Hash) ? entry["model"] : nil
     next unless model.is_a?(String) && !model.strip.empty?
-    routing[name] = { "model" => opencode_model_id(model) }
+    # host_config is pre-resolved INCLUSIVE of passthrough: threading the raw
+    # keywords keeps a resolved-nil (unmapped/unknown host) from being
+    # re-resolved against whichever machine happens to run the installer.
+    routing[name] = { "model" => opencode_model_id(model, host_config, hosts: hosts, hostname: hostname) }
   end
   routing
 rescue JSON::ParserError => e
@@ -300,19 +336,30 @@ rescue JSON::ParserError => e
   raise "Invalid OpenCode config #{config_path}: #{e.message}"
 end
 
-# Translate a pi-format model id from opencode.json ("ollama/<id>[-:]cloud") to
-# the opencode-native provider form ("ollama-cloud/<id>"). The trailing -cloud or
-# :cloud cloud-execution marker is not part of the native model id.
-def opencode_model_id(model)
+# Translate a canonical store model id ("provider/<id>[...]") for one machine.
+# +host_config+ is the resolved hosts.json entry (see hosts_config_for); when
+# omitted, the entry for this machine is resolved from the real hosts.json and
+# Socket.gethostname. A host without an entry — the default layout — leaves the
+# id unchanged. "provider" swaps a leading "ollama/" prefix; "strip_cloud_marker"
+# removes a trailing -cloud / :cloud execution marker.
+def opencode_model_id(model, host_config = nil, hosts: nil, hostname: nil)
   unless model.is_a?(String)
     raise ArgumentError, "Invalid model id #{model.inspect}: must be a pi-format string"
   end
   prefix, id = model.split("/", 2)
-  unless prefix == "ollama" && id.is_a?(String) && !id.strip.empty?
-    raise ArgumentError, "Invalid model id #{model.inspect}: must be pi format ollama/<model-id>"
+  unless prefix && !prefix.empty? && id.is_a?(String) && !id.strip.empty?
+    raise ArgumentError, "Invalid model id #{model.inspect}: must be pi format provider/<model-id>"
   end
-  id = id.sub(/[:-]cloud\z/, "")
-  "ollama-cloud/#{id}"
+
+  host_config = hosts_config_for(hostname, hosts) if host_config.nil?
+  provider = host_config.is_a?(Hash) ? host_config["provider"] : nil
+  id = id.sub(/[:-]cloud\z/, "") if host_config.is_a?(Hash) && host_config["strip_cloud_marker"] == true
+
+  if prefix == "ollama" && provider.is_a?(String) && !provider.strip.empty?
+    "#{provider}/#{id}"
+  else
+    "#{prefix}/#{id}"
+  end
 end
 
 # Parse the canonical agent file's frontmatter and body.

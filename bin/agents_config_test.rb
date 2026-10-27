@@ -10,6 +10,7 @@ require "tmpdir"
 require "fileutils"
 require "json"
 require "open3"
+require "socket"
 require "yaml"
 require "minitest/autorun"
 
@@ -325,40 +326,27 @@ class AgentsConfigTest < Minitest::Test
     out, ok = run_cli("opencode")
     assert ok, out
     routing = JSON.parse(File.read(File.join(@home, ".config", "opencode", "opencode.json"))).fetch("agent")
-    expected = {
-      # deepseek group
-      "frontend-vue"             => "ollama-cloud/deepseek-v4.1-flash:1017",
-      "janitor"                  => "ollama-cloud/deepseek-v4.1-flash:1017",
-      "rails-backend"            => "ollama-cloud/deepseek-v4.1-flash:1017",
-      "sprinter"                 => "ollama-cloud/deepseek-v4.1-flash:1017",
-      # glm group
-      "orchestrator"             => "ollama-cloud/glm-5.3-flash",
-      "qa-tester"                => "ollama-cloud/glm-5.3-flash",
-      "watchmaker"               => "ollama-cloud/glm-5.3-flash",
-      "cartographer"             => "ollama-cloud/glm-5.3-flash",
-      "designer"                 => "ollama-cloud/glm-5.3-flash",
-      "docs-writer"              => "ollama-cloud/glm-5.3-flash",
-      "frontend-vue-watchmaker"  => "ollama-cloud/glm-5.3-flash",
-      "rails-backend-watchmaker" => "ollama-cloud/glm-5.3-flash",
-      # mistral group
-      "redteam"                  => "ollama-cloud/mistral-large-4",
-      "security-guardian"        => "ollama-cloud/mistral-large-4",
-      # kimi group
-      "principal"                => "ollama-cloud/kimi-k3",
-      "infra-platform"           => "ollama-cloud/kimi-k3",
-      "image-analyst"            => "ollama-cloud/kimi-k3",
-      # built-in
-      "plan"                     => "ollama-cloud/kimi-k3",
-    }
+    # Derive the expected map from the canonical store through the same
+    # default-resolution transform the install path uses: the test process and
+    # the CLI subprocess share hostname + committed hosts.json, so derived ==
+    # emitted on any machine (no machine-dependent hardcoded ids here).
+    canon = JSON.parse(File.read(OPENCODE_CONFIG)).fetch("agent")
+    expected = canon.each_with_object({}) do |(name, entry), map|
+      model = entry.is_a?(Hash) ? entry["model"] : nil
+      map[name] = { "model" => opencode_model_id(model) } if model.is_a?(String) && !model.strip.empty?
+    end
+    # Built-in "plan" carries a model and routes; disable-only built-ins do not.
+    assert expected.key?("plan"), "\"plan\" must carry a model in the canonical map"
+    refute expected.key?("explore")
+    refute expected.key?("build")
     assert_equal Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.map { |p| File.basename(p, ".md") }.sort,
                  (expected.keys - ["plan"]).sort,
                  "expected model map must cover every canonical agent"
     assert_equal expected.keys.sort, routing.keys.sort,
                  "routing must contain exactly the modeled agents"
-    expected.each do |name, model|
-      entry = routing.fetch(name)
-      assert_equal({ "model" => model }, entry,
-                   "wrong routing entry for #{name}: #{entry.inspect}")
+    expected.each do |name, entry|
+      assert_equal entry, routing.fetch(name),
+                   "wrong routing entry for #{name}: #{routing[name].inspect}"
     end
     # Disable-only built-ins carry no model and must not become routing entries.
     refute routing.key?("explore")
@@ -532,6 +520,63 @@ class AgentsConfigTest < Minitest::Test
     ensure
       FileUtils.rm_rf(sandbox) if sandbox
     end
+  end
+
+  def test_opencode_cli_emits_canonical_ids_for_host_without_hosts_entry
+    sandbox = Dir.mktmpdir("agents_config_unmapped_host")
+    repo = File.join(sandbox, "repo")
+    home = File.join(sandbox, "home")
+    FileUtils.cp_r(STORE, repo)
+    # Empty hosts map: no machine is mapped, so the emitted ids must be the
+    # canonical store ids byte-identically, cloud markers included (the exact
+    # regression PR #3 caused for the Mac).
+    File.write(File.join(repo, "hosts.json"), JSON.dump({}))
+
+    out, ok = run_cli_at(File.join(repo, "bin", "agents_config"), home, "opencode")
+    assert ok, out
+    config = JSON.parse(File.read(File.join(home, ".config", "opencode", "opencode.json")))
+    assert_equal ["agent"], config.keys
+    assert File.file?(File.join(home, ".config", "opencode", ".opencode_routing_generated"))
+    canon = JSON.parse(File.read(File.join(repo, "opencode.json"))).fetch("agent")
+    canon.each do |name, entry|
+      model = entry.is_a?(Hash) ? entry["model"] : nil
+      next unless model.is_a?(String) && !model.strip.empty?
+      assert_equal model, config.fetch("agent").fetch(name).fetch("model"),
+                   "unmapped host must get the canonical id with its cloud marker intact"
+    end
+  ensure
+    FileUtils.rm_rf(sandbox) if sandbox
+  end
+
+  def test_opencode_cli_translates_ids_for_mapped_hostname
+    sandbox = Dir.mktmpdir("agents_config_mapped_host")
+    repo = File.join(sandbox, "repo")
+    home = File.join(sandbox, "home")
+    FileUtils.cp_r(STORE, repo)
+    # Map the hostname of THIS test process: the CLI subprocess inherits it, so
+    # the emitted ids must be the host-config-resolved ones.
+    hostname = Socket.gethostname
+    sandbox_hosts = { hostname => { "provider" => "ollama-cloud", "strip_cloud_marker" => true } }
+    File.write(File.join(repo, "hosts.json"), JSON.dump(sandbox_hosts))
+
+    out, ok = run_cli_at(File.join(repo, "bin", "agents_config"), home, "opencode")
+    assert ok, out
+    config = JSON.parse(File.read(File.join(home, ".config", "opencode", "opencode.json")))
+    assert_equal ["agent"], config.keys
+    assert File.file?(File.join(home, ".config", "opencode", ".opencode_routing_generated"))
+    canon = JSON.parse(File.read(File.join(repo, "opencode.json"))).fetch("agent")
+    host_config = hosts_config_for(hostname, sandbox_hosts)
+    canon.each do |name, entry|
+      model = entry.is_a?(Hash) ? entry["model"] : nil
+      next unless model.is_a?(String) && !model.strip.empty?
+      expected = opencode_model_id(model, host_config)
+      assert_equal expected, config.fetch("agent").fetch(name).fetch("model"),
+                   "mapped host #{hostname.inspect} must get translated ids"
+      assert expected.start_with?("ollama-cloud/"),
+             "provider swap must be observable in the emitted id"
+    end
+  ensure
+    FileUtils.rm_rf(sandbox) if sandbox
   end
 
   def test_pi_install_generates_frontmatter_first_agents_with_opencode_models
@@ -913,19 +958,84 @@ class AgentsConfigTest < Minitest::Test
   end
 
   def test_opencode_model_id_translation
-    # Ticket-pinned ticket examples from opencode.json
-    assert_equal "ollama-cloud/deepseek-v4.1-flash:1017", opencode_model_id("ollama/deepseek-v4.1-flash:1017-cloud")
-    assert_equal "ollama-cloud/glm-5.3-flash", opencode_model_id("ollama/glm-5.3-flash:cloud")
-    assert_equal "ollama-cloud/glm-5.3", opencode_model_id("ollama/glm-5.3:cloud")
-    assert_equal "ollama-cloud/kimi-k3", opencode_model_id("ollama/kimi-k3:cloud")
-    assert_equal "ollama-cloud/mistral-large-4", opencode_model_id("ollama/mistral-large-4:cloud")
-    # Ids without a trailing cloud marker pass through unchanged.
-    assert_equal "ollama-cloud/qwen3:32b", opencode_model_id("ollama/qwen3:32b")
+    hosts = { "vectra-server" => { "provider" => "ollama-cloud", "strip_cloud_marker" => true } }
+    # Ticket-pinned examples from opencode.json, resolved for a mapped host.
+    assert_equal "ollama-cloud/deepseek-v4.1-flash:1017", opencode_model_id("ollama/deepseek-v4.1-flash:1017-cloud", nil, hosts: hosts, hostname: "vectra-server")
+    assert_equal "ollama-cloud/glm-5.3-flash", opencode_model_id("ollama/glm-5.3-flash:cloud", nil, hosts: hosts, hostname: "vectra-server")
+    assert_equal "ollama-cloud/glm-5.3", opencode_model_id("ollama/glm-5.3:cloud", nil, hosts: hosts, hostname: "vectra-server")
+    assert_equal "ollama-cloud/kimi-k3", opencode_model_id("ollama/kimi-k3:cloud", nil, hosts: hosts, hostname: "vectra-server")
+    assert_equal "ollama-cloud/mistral-large-4", opencode_model_id("ollama/mistral-large-4:cloud", nil, hosts: hosts, hostname: "vectra-server")
+    # Ids without a trailing cloud marker keep their id under the swapped provider.
+    assert_equal "ollama-cloud/qwen3:32b", opencode_model_id("ollama/qwen3:32b", nil, hosts: hosts, hostname: "vectra-server")
 
-    # Fail-fast on malformed input.
+    # Fail-fast on malformed input, regardless of host config.
     assert_raises(ArgumentError, "missing provider prefix must raise") { opencode_model_id("deepseek-v4.1-flash:1017-cloud") }
     assert_raises(ArgumentError, "empty id must raise") { opencode_model_id("ollama/") }
     assert_raises(ArgumentError, "empty input must raise") { opencode_model_id("") }
+  end
+
+  def test_opencode_model_id_passthrough_for_hosts_without_entries
+    cloud = "ollama/deepseek-v4.1-flash:1017-cloud"
+    # Hostname absent from a provided map: canonical id byte-identical, marker kept.
+    assert_equal cloud, opencode_model_id(cloud, nil, hosts: {}, hostname: "some-mac")
+    # Hostname absent from the real committed hosts.json: same passthrough.
+    assert_equal cloud, opencode_model_id(cloud, nil, hostname: "no-such-host-in-the-map")
+    # A mapped host without strip flag keeps the marker but swaps the provider.
+    hosts = { "other-server" => { "provider" => "ollama-cloud" } }
+    assert_equal "ollama-cloud/deepseek-v4.1-flash:1017-cloud", opencode_model_id(cloud, nil, hosts: hosts, hostname: "other-server")
+  end
+
+  def test_load_hosts_config_failsafe_on_missing_or_invalid_file
+    Dir.mktmpdir do |dir|
+      capture_io do
+        # Missing file.
+        assert_nil load_hosts_config(File.join(dir, "missing_hosts.json"))
+        # Invalid JSON.
+        File.write(File.join(dir, "hosts.json"), "{ nope")
+        assert_nil load_hosts_config(File.join(dir, "hosts.json"))
+        # Valid JSON that is not an object.
+        File.write(File.join(dir, "hosts.json"), "[1, 2]")
+        assert_nil load_hosts_config(File.join(dir, "hosts.json"))
+      end
+    end
+
+    hosts = { "vectra-server" => { "provider" => "ollama-cloud", "strip_cloud_marker" => true } }
+    assert_equal hosts, load_hosts_config(HOSTS_FILE)
+  end
+
+  def test_hosts_config_for_resolves_entries_and_defaults_to_passthrough
+    hosts = { "vectra-server" => { "provider" => "ollama-cloud", "strip_cloud_marker" => true } }
+    assert_equal hosts["vectra-server"], hosts_config_for("vectra-server", hosts)
+    assert_nil hosts_config_for("some-mac", hosts)
+    assert_nil hosts_config_for("", hosts)
+    capture_io do
+      assert_nil hosts_config_for("vectra-server", JSON.dump({ "vectra-server" => 5 }))
+      # Real-file default path for a hostname with no entry: nil => passthrough
+      # (the commented plan variant — nil for "vectra-server" itself — is the
+      # same invocation the last line pins to the committed map's entry, so it
+      # cannot be nil while hosts.json is valid).
+      assert_nil hosts_config_for("no-such-host-passed-explicitly", nil)
+    end
+    assert_equal hosts["vectra-server"], hosts_config_for("vectra-server")
+  end
+
+  def test_opencode_agent_routing_resolves_ids_per_host
+    canon = JSON.parse(File.read(OPENCODE_CONFIG)).fetch("agent")
+    hosts = { "vectra-server" => { "provider" => "ollama-cloud", "strip_cloud_marker" => true } }
+
+    routing = opencode_agent_routing(OPENCODE_CONFIG, "vectra-server", hosts)
+    canon.each do |name, entry|
+      model = entry.is_a?(Hash) ? entry["model"] : nil
+      next unless model.is_a?(String) && !model.strip.empty?
+      assert_equal opencode_model_id(model, hosts[name]), routing.fetch(name).fetch("model")
+    end
+
+    unmapped = opencode_agent_routing(OPENCODE_CONFIG, "no-such-host-in-the-map")
+    canon.each do |name, entry|
+      model = entry.is_a?(Hash) ? entry["model"] : nil
+      next unless model.is_a?(String) && !model.strip.empty?
+      assert_equal model, unmapped.fetch(name).fetch("model")
+    end
   end
 
   def test_parse_agent_file_handles_non_hash_frontmatter

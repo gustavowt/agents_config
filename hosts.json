@@ -1,0 +1,6 @@
+{
+  "vectra-server": {
+    "provider": "ollama-cloud",
+    "strip_cloud_marker": true
+  }
+}

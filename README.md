@@ -92,6 +92,31 @@ Pi's `agents/` directory is installer-managed and contains generated Markdown
 plus an ownership marker. Do not hand-edit these files; edit canonical agents or
 `opencode.json`, then rerun the installer.
 
+### Model-id routing per machine
+
+Model ids in the emitted `agent` block are resolved per machine from
+`hosts.json` in the store root:
+
+```json
+{
+  "vectra-server": {
+    "provider": "ollama-cloud",
+    "strip_cloud_marker": true
+  }
+}
+```
+
+- A hostname absent from the map — the default — is passthrough: canonical
+  `ollama/<id>` ids are emitted unchanged, `-cloud` / `:cloud` markers included.
+- `provider`, when set, swaps a leading `ollama/` for that provider.
+- `strip_cloud_marker` removes a trailing `-cloud` / `:cloud` marker.
+- A missing or unparseable `hosts.json` is also passthrough (with a warning);
+  the installer never fails because of it.
+- Known hosts: `vectra-server` runs provider `ollama-cloud` (direct ollama.com),
+  so store ids are provider-swapped with the cloud marker stripped; the owner's
+  Mac runs a single `ollama` provider against a LAN server whose ids are the
+  canonical ones, so it needs no entry.
+
 ## Day-to-day workflow
 
 1. Edit canonical files in [`agents/<name>.md`](agents/) or [`AGENTS.md`](AGENTS.md).
