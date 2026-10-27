@@ -108,12 +108,20 @@ def build_gemini(target)
 end
 
 # Build artifacts for the opencode target.
-# - Whole shared agents/ dir is one symlink.
-# - AGENTS.md is symlinked.
+# - AGENTS.md is symlinked (global instructions).
+# - Each agent is GENERATED as a flat agents/<name>.md file with opencode
+#   frontmatter (name, description, mode, model). Models come from the checked-in
+#   opencode.json (pi-format ollama ids) and are translated to opencode-native
+#   form at build time, so a malformed id fails before any disk write.
 def build_opencode(target)
+  models = pi_agent_models
   arts = []
-  arts << Artifact.new(:symlink, AGENTS_DIR, target.agents_dest_dir, {})
   arts << Artifact.new(:symlink, RULES_FILE, target.rules_dest, {}) if File.exist?(RULES_FILE)
+  Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.each do |src|
+    name = File.basename(src, ".md")
+    arts << Artifact.new(:generate, src, File.join(target.agents_dest_dir, "#{name}.md"),
+                         { name: name, format: :opencode, model: opencode_model_id(models.fetch(name)) })
+  end
   arts
 end
 
@@ -249,6 +257,21 @@ rescue JSON::ParserError => e
   raise "Invalid OpenCode config #{config_path}: #{e.message}"
 end
 
+# Translate a pi-format model id from opencode.json ("ollama/<id>[-:]cloud") to
+# the opencode-native provider form ("ollama-cloud/<id>"). The trailing -cloud or
+# :cloud cloud-execution marker is not part of the native model id.
+def opencode_model_id(model)
+  unless model.is_a?(String)
+    raise ArgumentError, "Invalid model id #{model.inspect}: must be a pi-format string"
+  end
+  prefix, id = model.split("/", 2)
+  unless prefix == "ollama" && id.is_a?(String) && !id.strip.empty?
+    raise ArgumentError, "Invalid model id #{model.inspect}: must be pi format ollama/<model-id>"
+  end
+  id = id.sub(/[:-]cloud\z/, "")
+  "ollama-cloud/#{id}"
+end
+
 # Parse the canonical agent file's frontmatter and body.
 # Returns [frontmatter_hash, body_string]. Frontmatter is optional; if absent,
 # returns [{}, full_file_content_as_body].
@@ -347,6 +370,28 @@ def render_pi_agent(src, name, model)
   FILE
 end
 
+# OpenCode reads per-agent frontmatter (name/description/mode/model). Like Pi,
+# frontmatter must be the first content in the file, so the marker follows its
+# closing delimiter; our_generated? recognizes this form. Only the
+# opencode-supported keys are emitted; other canonical keys (e.g. permission)
+# are dropped.
+def render_opencode_agent(src, name, model)
+  canonical_fm, body = parse_agent_file(src)
+  opencode_fm = {
+    "name"        => canonical_fm.fetch("name")        { raise "agents/#{name}.md: missing name for opencode generation" },
+    "description" => canonical_fm.fetch("description") { raise "agents/#{name}.md: missing description for opencode generation" },
+    "mode"        => canonical_fm.fetch("mode")        { raise "agents/#{name}.md: missing mode for opencode generation" },
+    "model"       => model
+  }
+  yaml_str = YAML.dump(opencode_fm).sub(/\A---\n/, "")
+  <<~FILE
+    ---
+    #{yaml_str}---
+    # #{GENERATED_MARKER}
+    #{body}
+  FILE
+end
+
 # Render a generated agent file for Codex: marker comment + TOML fields.
 def render_codex_agent(src, name)
   canonical_fm, body = parse_agent_file(src)
@@ -371,6 +416,7 @@ def render_generated_agent(src, name, format_arg = nil, format: nil, model: nil)
   when :cursor then render_cursor_agent(src, name)
   when :codex  then render_codex_agent(src, name)
   when :pi     then render_pi_agent(src, name, model || raise(ArgumentError, "Pi model is required"))
+  when :opencode then render_opencode_agent(src, name, model || raise(ArgumentError, "OpenCode model is required"))
   else
     raise ArgumentError, "Unknown format: #{fmt}"
   end
@@ -442,19 +488,37 @@ def render_pi_models(ollama)
   ) + "\n"
 end
 
+def legacy_pi_models?(dest)
+  return false unless File.file?(dest) && !File.symlink?(dest)
+  parsed = JSON.parse(File.read(dest))
+  parsed.is_a?(Hash) && parsed["providers"].is_a?(Hash)
+rescue
+  false
+end
+
 def install_pi_models(art)
   dest = art.dest
+  adopted = false
   if (File.exist?(dest) || File.symlink?(dest)) && !pi_models_owned?(dest)
-    warn "  ! skip #{dest}: existing file is not managed by us"
-    return false
+    if legacy_pi_models?(dest)
+      adopted = true
+      File.write(File.join(File.dirname(dest), PI_MODELS_MARKER), "# #{GENERATED_MARKER}\n")
+    else
+      warn "  ! skip #{dest}: existing file is not managed by us"
+      return false
+    end
   end
   rendered = render_pi_models(art.opts.fetch(:ollama))
-  return true if pi_models_owned?(dest) && File.read(dest) == rendered
+  return true if !adopted && pi_models_owned?(dest) && File.read(dest) == rendered
   File.delete(dest) if File.exist?(dest) || File.symlink?(dest)
   FileUtils.mkdir_p(File.dirname(dest))
   File.write(dest, rendered)
   File.write(File.join(File.dirname(dest), PI_MODELS_MARKER), "# #{GENERATED_MARKER}\n")
-  puts "  ~ #{dest} (generated)"
+  if adopted
+    puts "  ~ #{dest} (adopted legacy Pi models, regenerated)"
+  else
+    puts "  ~ #{dest} (generated)"
+  end
   true
 end
 
@@ -523,6 +587,27 @@ def prepare_pi_agents_dir(target)
   true
 end
 
+# OpenCode generates flat agent files in <config>/agents. The previous release
+# symlinked the whole agents/ directory; when that is one of our symlinks,
+# replace it with a real directory so :generate never writes through the store.
+def prepare_opencode_agents_dir(target)
+  dir = target.agents_dest_dir
+  if File.symlink?(dir)
+    if our_symlink?(dir)
+      File.delete(dir)
+      puts "  - #{dir} (old opencode layout)"
+    else
+      warn "  ! skip #{dir}: foreign symlink present, not managed by us"
+      return false
+    end
+  elsif File.exist?(dir) && !File.directory?(dir)
+    warn "  ! skip #{dir}: real file present, not a directory"
+    return false
+  end
+  FileUtils.mkdir_p(dir)
+  true
+end
+
 def pi_agents_dir_owned?(dir)
   File.file?(File.join(dir, PI_AGENTS_DIR_MARKER)) &&
     File.read(File.join(dir, PI_AGENTS_DIR_MARKER)).start_with?("# #{GENERATED_MARKER}")
@@ -539,6 +624,7 @@ def install_target(target)
   arts = BUILDERS[target.name].call(target)
   FileUtils.mkdir_p(target.config_root)
   return unless target.name != "pi" || prepare_pi_agents_dir(target)
+  return unless target.name != "opencode" || prepare_opencode_agents_dir(target)
   migrate_old_gemini_layout(target) if target.name == "gemini"
   arts.each do |art|
     case art.kind
@@ -552,6 +638,13 @@ end
 def remove_target(target, prune: false)
   puts "Remove: #{target.name}"
   arts = BUILDERS[target.name].call(target)
+  # Also clean the old whole-dir agents symlink (opencode migration in reverse),
+  # mirroring the gemini old-layout cleanup.
+  if target.name == "opencode" && our_symlink?(target.agents_dest_dir)
+    legacy = target.agents_dest_dir
+    File.delete(legacy)
+    puts "  - #{legacy} (old opencode layout)"
+  end
   arts.each do |art|
     case art.kind
     when :symlink then remove_symlink(art)

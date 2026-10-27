@@ -56,15 +56,20 @@ ln -sf ~/agents_config/bin/agents_config ~/.local/bin/agents_config
 | Target | Config directory | Install behavior |
 |--------|------------------|------------------|
 | `gemini` | `~/.gemini/config` | Symlink `AGENTS.md`; generate `agents/<name>.md` with Gemini frontmatter (`name`, `description`, `model`, `subagent`) |
-| `opencode` | `~/.config/opencode` | Symlink entire `agents/` directory and `AGENTS.md` (read-through, no transform) |
+| `opencode` | `~/.config/opencode` | Symlink `AGENTS.md`; generate `agents/<name>.md` with per-agent frontmatter (`name`, `description`, `mode`, `model`), models translated from `opencode.json` (pi `ollama/<id>…cloud` ids → opencode-native `ollama-cloud/<id>`) |
 | `cursor` | `~/.cursor` | Symlink `AGENTS.md`; generate `agents/<name>.md` with Cursor frontmatter (`name`, `description`) |
 | `codex` | `~/.codex` | Symlink `AGENTS.md`; generate `agents/<name>.toml` with TOML fields (`name`, `description`, `developer_instructions`) |
 | `pi` | `~/.pi/agent` | Symlink `AGENTS.md`; generate frontmatter-first `agents/<name>.md` for the optional pi-sub-agent extension, with each model from `opencode.json` |
 
 ### Symlink vs generated
 
-- **OpenCode** uses direct symlinks. Edit canonical files in this repo and changes
-  are live immediately — no re-run needed.
+- **OpenCode** writes generated files marked with `# agents_config:generated`
+  (frontmatter first, like Pi), with per-agent frontmatter (`name`, `description`,
+  `mode`, `model`) where the model is translated from `opencode.json` (pi
+  `ollama/<id>…cloud` ids become opencode-native `ollama-cloud/<id>`).
+  **Re-run install after editing** canonical files; legacy installs that
+  symlinked the whole `agents/` directory are migrated to a real directory on
+  the next install.
 - **Gemini, Cursor, Codex, and Pi** write generated files marked with
   `# agents_config:generated`. **Re-run install after editing**
   canonical `agents/*.md` to regenerate derived files. Pi places its marker just
@@ -106,7 +111,9 @@ Agent files use YAML frontmatter. Common keys:
 
 The canonical frontmatter does not set a generic `model`: that would affect
 Gemini. Pi's `model` is injected only into its generated files from
-[`opencode.json`](opencode.json).
+[`opencode.json`](opencode.json). OpenCode's generated files likewise carry a
+per-agent `model` injected from `opencode.json`, translated from the pi format
+`ollama/<id>[-:]cloud` to the opencode-native `ollama-cloud/<id>`.
 
 Example canonical file:
 

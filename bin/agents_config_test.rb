@@ -288,16 +288,171 @@ class AgentsConfigTest < Minitest::Test
     assert_equal 'name = "custom"', File.read(real)
   end
 
-  def test_opencode_install_creates_dir_symlink
+  def test_opencode_install_generates_agent_files_with_opencode_models
     out, ok = run_cli("opencode")
     assert ok, out
-    link = File.join(@home, ".config", "opencode", "agents")
-    assert File.symlink?(link)
-    assert File.exist?(link)
-    assert_equal File.join(STORE, "agents"), File.expand_path(File.readlink(link))
+    agents_dir = File.join(@home, ".config", "opencode", "agents")
+    assert File.directory?(agents_dir), out
+    refute File.symlink?(agents_dir), out
+
+    store_agents = Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.map { |p| File.basename(p, ".md") }
+    generated = Dir.glob(File.join(agents_dir, "*.md")).sort
+    assert_equal store_agents.map { |n| File.join(agents_dir, "#{n}.md") }.sort, generated,
+                 "expected exactly one generated .md per store agent"
+
     rules = File.join(@home, ".config", "opencode", "AGENTS.md")
-    assert File.symlink?(rules)
-    assert File.exist?(rules)
+    assert File.symlink?(rules), out
+    assert File.exist?(rules), out
+
+    sprinter_file = File.join(agents_dir, "sprinter.md")
+    refute File.symlink?(sprinter_file)
+    sprinter_fm = parse_frontmatter(sprinter_file)
+    assert_equal "sprinter", sprinter_fm["name"]
+    assert sprinter_fm["description"], "sprinter must keep a description"
+    assert_equal "subagent", sprinter_fm["mode"]
+    assert_equal "ollama-cloud/deepseek-v4.1-flash:1017", sprinter_fm["model"]
+
+    orch_fm = parse_frontmatter(File.join(agents_dir, "orchestrator.md"))
+    assert_equal "orchestrator", orch_fm["name"]
+    assert_equal "primary", orch_fm["mode"]
+    refute orch_fm.key?("permission"), "canonical permission key must be dropped for opencode"
+  end
+
+  def test_opencode_generates_expected_models_per_agent
+    out, ok = run_cli("opencode")
+    assert ok, out
+    agents_dir = File.join(@home, ".config", "opencode", "agents")
+    expected = {
+      # deepseek group
+      "frontend-vue"             => "ollama-cloud/deepseek-v4.1-flash:1017",
+      "rails-backend"            => "ollama-cloud/deepseek-v4.1-flash:1017",
+      "sprinter"                 => "ollama-cloud/deepseek-v4.1-flash:1017",
+      "janitor"                  => "ollama-cloud/deepseek-v4.1-flash:1017",
+      # glm group
+      "orchestrator"             => "ollama-cloud/glm-5.3-flash",
+      "qa-tester"                => "ollama-cloud/glm-5.3-flash",
+      "watchmaker"               => "ollama-cloud/glm-5.3-flash",
+      "rails-backend-watchmaker" => "ollama-cloud/glm-5.3-flash",
+      "cartographer"             => "ollama-cloud/glm-5.3-flash",
+      "designer"                 => "ollama-cloud/glm-5.3-flash",
+      "docs-writer"              => "ollama-cloud/glm-5.3-flash",
+      "frontend-vue-watchmaker"  => "ollama-cloud/glm-5.3-flash",
+      # mistral group
+      "redteam"                  => "ollama-cloud/mistral-large-4",
+      "security-guardian"        => "ollama-cloud/mistral-large-4",
+      # kimi group
+      "principal"                => "ollama-cloud/kimi-k3",
+      "infra-platform"           => "ollama-cloud/kimi-k3",
+      "image-analyst"            => "ollama-cloud/kimi-k3",
+    }
+    assert_equal Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.map { |p| File.basename(p, ".md") }.sort,
+                 expected.keys.sort,
+                 "expected model map must cover every canonical agent"
+    expected.each do |name, model|
+      file = File.join(agents_dir, "#{name}.md")
+      assert File.file?(file), "Expected generated file #{file} to exist"
+      fm = parse_frontmatter(file)
+      assert_equal name, fm["name"], "wrong name for #{name}: #{fm.inspect}"
+      assert fm["description"], "#{name} must keep a description"
+      assert_equal model, fm["model"], "Expected #{name} to use #{model} (got #{fm['model'].inspect})"
+    end
+  end
+
+  def test_opencode_migrates_installer_owned_agents_symlink
+    legacy_dir = File.join(@home, ".config", "opencode", "agents")
+    File.symlink(AGENTS_DIR, legacy_dir)
+
+    store_files = Dir.glob(File.join(AGENTS_DIR, "*.md")).sort
+    snapshot = store_files.to_h { |path| [path, File.read(path)] }
+
+    out, ok = run_cli("opencode")
+    assert ok, out
+    assert_includes out, "old opencode layout"
+    assert File.directory?(legacy_dir), out
+    refute File.symlink?(legacy_dir), out
+
+    generated = Dir.glob(File.join(legacy_dir, "*.md")).sort
+    assert_equal store_files.map { |p| File.join(legacy_dir, File.basename(p)) }.sort, generated
+
+    snapshot.each do |path, content|
+      assert_equal content, File.read(path), "Store file #{path} must stay byte-identical during opencode migration"
+    end
+    assert_equal store_files, Dir.glob(File.join(AGENTS_DIR, "*.md")).sort,
+                 "Store file list must not change during opencode migration"
+  end
+
+  def test_opencode_remove_and_prune
+    store_files = Dir.glob(File.join(AGENTS_DIR, "*.md")).sort
+    snapshot = store_files.to_h { |path| [path, File.read(path)] }
+
+    run_cli("opencode")
+    agents_dir = File.join(@home, ".config", "opencode", "agents")
+    assert File.file?(File.join(agents_dir, "sprinter.md"))
+    assert File.symlink?(File.join(@home, ".config", "opencode", "AGENTS.md"))
+
+    out, ok = run_cli("opencode", "--remove", "--prune")
+    assert ok, out
+    refute File.exist?(File.join(@home, ".config", "opencode", "AGENTS.md"))
+    refute File.exist?(agents_dir), "agents dir should be pruned when only our generated files were removed"
+    assert File.exist?(File.join(@home, ".config", "opencode"))
+
+    # A real file we did not generate survives --remove --prune and keeps the
+    # agents dir from being pruned (only our_generated? files are ever deleted).
+    FileUtils.mkdir_p(agents_dir)
+    foreign = File.join(agents_dir, "custom.md")
+    File.write(foreign, "keep me")
+    out, ok = run_cli("opencode", "--remove", "--prune")
+    assert ok, out
+    assert File.exist?(agents_dir), "agents dir with foreign content must not be pruned"
+    assert_equal "keep me", File.read(foreign)
+    snapshot.each do |path, content|
+      assert_equal content, File.read(path), "Store file #{path} must stay byte-identical across opencode remove"
+    end
+    assert_equal store_files, Dir.glob(File.join(AGENTS_DIR, "*.md")).sort,
+                 "Store file list must not change across opencode remove"
+  end
+
+  def test_opencode_install_preserves_foreign_agents_symlink
+    foreign_dir = File.join(@home, "foreign_agents")
+    FileUtils.mkdir_p(foreign_dir)
+    dest = File.join(@home, ".config", "opencode", "agents")
+    File.symlink(foreign_dir, dest)
+
+    out, ok = run_cli("opencode")
+    assert ok, out
+    assert_includes out, "foreign symlink present, not managed by us"
+    assert File.symlink?(dest)
+    assert_equal foreign_dir, File.expand_path(File.readlink(dest))
+    # The whole target is skipped conservatively: no generated files, no AGENTS.md link.
+    refute File.exist?(File.join(@home, ".config", "opencode", "AGENTS.md"))
+    assert_includes out, "foreign symlink present"
+  end
+
+  def test_opencode_install_preserves_foreign_broken_agents_symlink
+    dest = File.join(@home, ".config", "opencode", "agents")
+    File.symlink("/nonexistent/foreign_agents", dest)
+
+    out, ok = run_cli("opencode")
+    assert ok, out
+    assert_includes out, "foreign symlink present, not managed by us"
+    assert File.symlink?(dest)
+    assert_equal "/nonexistent/foreign_agents", File.readlink(dest)
+  end
+
+  def test_opencode_install_is_idempotent
+    run_cli("opencode")
+    agents_dir = File.join(@home, ".config", "opencode", "agents")
+    before = Dir.glob(File.join(agents_dir, "*.md")).sort.to_h { |p| [p, File.read(p)] }
+    assert before.size > 0, "opencode install should generate agent files"
+
+    out2, ok = run_cli("opencode") # second run
+    assert ok, out2
+    after = Dir.glob(File.join(agents_dir, "*.md")).sort.to_h { |p| [p, File.read(p)] }
+    assert_equal before.keys, after.keys, "file set must not change on idempotent re-run"
+    before.each do |path, content|
+      assert_equal content, after[path], "content of #{path} must not change on idempotent re-run"
+    end
+    refute_includes out2, "! skip", "idempotent re-run must not warn about clobbering files"
   end
 
   def test_pi_install_generates_frontmatter_first_agents_with_opencode_models
@@ -334,6 +489,70 @@ class AgentsConfigTest < Minitest::Test
       assert_equal expected_models.fetch(name).fetch("model"), frontmatter["model"]
       assert_includes content, "# #{GENERATED_MARKER}\n"
     end
+  end
+
+  def test_pi_install_adopts_and_regenerates_legacy_models_json
+    models_path = File.join(@home, ".pi", "agent", "models.json")
+    marker_path = File.join(@home, ".pi", "agent", PI_MODELS_MARKER)
+    legacy_content = JSON.pretty_generate(
+      "providers" => {
+        "ollama" => {
+          "models" => [{ "id" => "kimi-k2.7-code:cloud" }]
+        }
+      }
+    )
+    File.write(models_path, legacy_content)
+    refute pi_models_owned?(models_path)
+    refute File.exist?(marker_path)
+
+    out, ok = run_cli("pi")
+    assert ok, out
+    assert_includes out, "~ #{models_path} (adopted legacy Pi models, regenerated)"
+    assert pi_models_owned?(models_path)
+    assert File.file?(marker_path)
+
+    regenerated = JSON.parse(File.read(models_path))
+    model_ids = regenerated.fetch("providers").fetch("ollama").fetch("models").map { |m| m.fetch("id") }.sort
+    # Derive from the checked-in opencode.json (same precedent as the
+    # frontmatter-first pi test) so this does not rot on config bumps.
+    agent_cfg = JSON.parse(File.read(File.join(STORE, "opencode.json"))).fetch("agent")
+    expected_ids = Dir.glob(File.join(AGENTS_DIR, "*.md")).sort.map do |path|
+      name = File.basename(path, ".md")
+      agent_cfg.fetch(name).fetch("model").split("/", 2).fetch(1)
+    end.uniq.sort
+    assert_equal expected_ids, model_ids
+  end
+
+  def test_pi_install_preserves_foreign_or_invalid_models_json
+    models_path = File.join(@home, ".pi", "agent", "models.json")
+    marker_path = File.join(@home, ".pi", "agent", PI_MODELS_MARKER)
+
+    # 1. Invalid JSON
+    File.write(models_path, "{ not valid json")
+    out, ok = run_cli("pi")
+    assert ok, out
+    assert_includes out, "! skip #{models_path}: existing file is not managed by us"
+    assert_equal "{ not valid json", File.read(models_path)
+    refute pi_models_owned?(models_path)
+    refute File.exist?(marker_path)
+
+    # 2. Valid JSON but missing providers key
+    File.write(models_path, JSON.dump("not_providers" => "something"))
+    out, ok = run_cli("pi")
+    assert ok, out
+    assert_includes out, "! skip #{models_path}: existing file is not managed by us"
+    assert_equal JSON.dump("not_providers" => "something"), File.read(models_path)
+    refute pi_models_owned?(models_path)
+    refute File.exist?(marker_path)
+
+    # 3. Valid JSON but providers is not a Hash
+    File.write(models_path, JSON.dump("providers" => ["not", "a", "hash"]))
+    out, ok = run_cli("pi")
+    assert ok, out
+    assert_includes out, "! skip #{models_path}: existing file is not managed by us"
+    assert_equal JSON.dump("providers" => ["not", "a", "hash"]), File.read(models_path)
+    refute pi_models_owned?(models_path)
+    refute File.exist?(marker_path)
   end
 
   def test_pi_remove_and_prune
@@ -614,6 +833,43 @@ class AgentsConfigTest < Minitest::Test
     assert_includes codex_rendered, '\\\\d+'
   end
 
+  def test_render_generated_agent_for_opencode_with_escapes
+    src = File.join(@home, "escape_me.md")
+    File.write(src, <<~MD)
+      ---
+      name: escaper
+      description: "Handles colons: and, quotes in description"
+      mode: subagent
+      permission:
+        edit: deny
+      ---
+
+      Body here.
+    MD
+    rendered = render_generated_agent(src, "escaper", format: :opencode, model: "ollama-cloud/glm-5.3-flash")
+    fm = YAML.safe_load(rendered[/\A---\n(.*?)\n---\n/m])
+    assert_equal({ "name" => "escaper", "description" => "Handles colons: and, quotes in description", "mode" => "subagent", "model" => "ollama-cloud/glm-5.3-flash" }, fm)
+    assert_includes rendered, "Body here."
+    assert_includes rendered, "# agents_config:generated"
+    refute_includes rendered, "permission"
+  end
+
+  def test_opencode_model_id_translation
+    # Ticket-pinned ticket examples from opencode.json
+    assert_equal "ollama-cloud/deepseek-v4.1-flash:1017", opencode_model_id("ollama/deepseek-v4.1-flash:1017-cloud")
+    assert_equal "ollama-cloud/glm-5.3-flash", opencode_model_id("ollama/glm-5.3-flash:cloud")
+    assert_equal "ollama-cloud/glm-5.3", opencode_model_id("ollama/glm-5.3:cloud")
+    assert_equal "ollama-cloud/kimi-k3", opencode_model_id("ollama/kimi-k3:cloud")
+    assert_equal "ollama-cloud/mistral-large-4", opencode_model_id("ollama/mistral-large-4:cloud")
+    # Ids without a trailing cloud marker pass through unchanged.
+    assert_equal "ollama-cloud/qwen3:32b", opencode_model_id("ollama/qwen3:32b")
+
+    # Fail-fast on malformed input.
+    assert_raises(ArgumentError, "missing provider prefix must raise") { opencode_model_id("deepseek-v4.1-flash:1017-cloud") }
+    assert_raises(ArgumentError, "empty id must raise") { opencode_model_id("ollama/") }
+    assert_raises(ArgumentError, "empty input must raise") { opencode_model_id("") }
+  end
+
   def test_parse_agent_file_handles_non_hash_frontmatter
     custom_src = File.join(@home, "scalar_fm.md")
     File.write(custom_src, <<~MD)
@@ -633,6 +889,9 @@ class AgentsConfigTest < Minitest::Test
     assert File.exist?(File.join(@home, ".gemini", "config", "agents", "sprinter.md"))
     assert File.exist?(File.join(@home, ".gemini", "config", "AGENTS.md"))
     assert File.exist?(File.join(@home, ".config", "opencode", "agents"))
+    assert File.directory?(File.join(@home, ".config", "opencode", "agents"))
+    refute File.symlink?(File.join(@home, ".config", "opencode", "agents"))
+    assert File.file?(File.join(@home, ".config", "opencode", "agents", "sprinter.md"))
     assert File.exist?(File.join(@home, ".config", "opencode", "AGENTS.md"))
     assert File.exist?(File.join(@home, ".cursor", "agents", "sprinter.md"))
     assert File.exist?(File.join(@home, ".cursor", "AGENTS.md"))
