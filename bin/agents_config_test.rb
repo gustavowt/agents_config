@@ -1027,7 +1027,7 @@ class AgentsConfigTest < Minitest::Test
     canon.each do |name, entry|
       model = entry.is_a?(Hash) ? entry["model"] : nil
       next unless model.is_a?(String) && !model.strip.empty?
-      assert_equal opencode_model_id(model, hosts[name]), routing.fetch(name).fetch("model")
+      assert_equal opencode_model_id(model, hosts["vectra-server"]), routing.fetch(name).fetch("model")
     end
 
     unmapped = opencode_agent_routing(OPENCODE_CONFIG, "no-such-host-in-the-map")
