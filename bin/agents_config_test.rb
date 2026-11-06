@@ -97,7 +97,7 @@ class AgentsConfigTest < Minitest::Test
     refute File.symlink?(orch_file)
     orch_fm = parse_frontmatter(orch_file)
     assert_equal "orchestrator", orch_fm["name"]
-    assert_equal "gemini-2.5-pro", orch_fm["model"]
+    assert_equal "gemini-4-argon-high", orch_fm["model"]
     refute orch_fm.key?("subagent"), "orchestrator (primary mode) should not have subagent: true"
 
     # Verify principal (Pro model, subagent mode -> subagent: true)
@@ -105,7 +105,7 @@ class AgentsConfigTest < Minitest::Test
     assert File.file?(princ_file)
     princ_fm = parse_frontmatter(princ_file)
     assert_equal "principal", princ_fm["name"]
-    assert_equal "gemini-2.5-pro", princ_fm["model"]
+    assert_equal "gemini-4-argon-high", princ_fm["model"]
     assert_equal true, princ_fm["subagent"]
 
     # Verify sprinter (Flash model, subagent mode -> subagent: true)
@@ -113,7 +113,7 @@ class AgentsConfigTest < Minitest::Test
     assert File.file?(sprinter_file)
     sprinter_fm = parse_frontmatter(sprinter_file)
     assert_equal "sprinter", sprinter_fm["name"]
-    assert_equal "gemini-2.5-flash", sprinter_fm["model"]
+    assert_equal "gemini-3.8-flash-medium", sprinter_fm["model"]
     assert_equal true, sprinter_fm["subagent"]
 
     # Verify cartographer (Flash model, subagent mode -> subagent: true)
@@ -121,7 +121,7 @@ class AgentsConfigTest < Minitest::Test
     assert File.file?(carto_file)
     carto_fm = parse_frontmatter(carto_file)
     assert_equal "cartographer", carto_fm["name"]
-    assert_equal "gemini-2.5-flash", carto_fm["model"]
+    assert_equal "gemini-3.8-flash-medium", carto_fm["model"]
     assert_equal true, carto_fm["subagent"]
   end
 
@@ -144,7 +144,7 @@ class AgentsConfigTest < Minitest::Test
       assert File.file?(file), "Expected #{file} to exist"
       fm = parse_frontmatter(file)
       assert_equal name, fm["name"]
-      assert_equal "gemini-2.5-pro", fm["model"], "Expected #{name} to use gemini-2.5-pro"
+      assert_equal "gemini-4-argon-high", fm["model"], "Expected #{name} to use gemini-4-argon-high"
       if name == "orchestrator"
         refute fm.key?("subagent"), "orchestrator should not have subagent: true"
       else
@@ -157,7 +157,7 @@ class AgentsConfigTest < Minitest::Test
       assert File.file?(file), "Expected #{file} to exist"
       fm = parse_frontmatter(file)
       assert_equal name, fm["name"]
-      assert_equal "gemini-2.5-flash", fm["model"], "Expected #{name} to use gemini-2.5-flash"
+      assert_equal "gemini-3.8-flash-medium", fm["model"], "Expected #{name} to use gemini-3.8-flash-medium"
       assert_equal true, fm["subagent"], "#{name} should have subagent: true"
     end
   end
@@ -789,7 +789,7 @@ class AgentsConfigTest < Minitest::Test
     assert ok
     file = File.join(@home, ".gemini", "config", "agents", "sprinter.md")
     assert File.file?(file)
-    assert_equal "gemini-2.5-flash", parse_frontmatter(file)["model"]
+    assert_equal "gemini-3.8-flash-medium", parse_frontmatter(file)["model"]
   end
 
   def test_install_replaces_wrong_symlink
@@ -803,7 +803,7 @@ class AgentsConfigTest < Minitest::Test
     assert ok, out
     refute File.symlink?(dest)
     assert File.file?(dest)
-    assert_equal "gemini-2.5-flash", parse_frontmatter(dest)["model"]
+    assert_equal "gemini-3.8-flash-medium", parse_frontmatter(dest)["model"]
   end
 
   def test_install_replaces_broken_symlink
@@ -814,7 +814,7 @@ class AgentsConfigTest < Minitest::Test
     assert ok, out
     refute File.symlink?(dest)
     assert File.file?(dest)
-    assert_equal "gemini-2.5-flash", parse_frontmatter(dest)["model"]
+    assert_equal "gemini-3.8-flash-medium", parse_frontmatter(dest)["model"]
   end
 
   def test_install_refuses_to_clobber_real_file
@@ -922,7 +922,7 @@ class AgentsConfigTest < Minitest::Test
     fm = YAML.safe_load(match[1])
     assert_equal "custom_agent", fm["name"]
     assert_equal custom_desc, fm["description"]
-    assert_equal "gemini-2.5-flash", fm["model"]
+    assert_equal "gemini-3.8-flash-medium", fm["model"]
     assert_equal true, fm["subagent"]
     assert_includes match[2], "Prompt body."
   end
