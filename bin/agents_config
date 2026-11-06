@@ -52,24 +52,24 @@ PI_MODELS_MARKER = ".models_config_generated"
 OPENCODE_CONFIG_MARKER = ".opencode_routing_generated"
 
 GEMINI_AGENT_MODELS = {
-  "orchestrator"              => "gemini-2.5-pro",
-  "principal"                 => "gemini-2.5-pro",
-  "infra-platform"            => "gemini-2.5-pro",
-  "rails-backend-watchmaker"  => "gemini-2.5-pro",
-  "frontend-vue-watchmaker"   => "gemini-2.5-pro",
-  "image-analyst"             => "gemini-2.5-pro",
-  "redteam"                   => "gemini-2.5-pro",
+  "orchestrator"              => "gemini-4-argon-high",
+  "principal"                 => "gemini-4-argon-high",
+  "infra-platform"            => "gemini-4-argon-high",
+  "rails-backend-watchmaker"  => "gemini-4-argon-high",
+  "frontend-vue-watchmaker"   => "gemini-4-argon-high",
+  "image-analyst"             => "gemini-4-argon-high",
+  "redteam"                   => "gemini-4-argon-high",
 
-  "cartographer"              => "gemini-2.5-flash",
-  "sprinter"                  => "gemini-2.5-flash",
-  "watchmaker"                => "gemini-2.5-flash",
-  "rails-backend"             => "gemini-2.5-flash",
-  "frontend-vue"              => "gemini-2.5-flash",
-  "qa-tester"                 => "gemini-2.5-flash",
-  "security-guardian"         => "gemini-2.5-flash",
-  "designer"                  => "gemini-2.5-flash",
-  "docs-writer"               => "gemini-2.5-flash",
-  "janitor"                   => "gemini-2.5-flash",
+  "cartographer"              => "gemini-3.8-flash-medium",
+  "sprinter"                  => "gemini-3.8-flash-medium",
+  "watchmaker"                => "gemini-3.8-flash-medium",
+  "rails-backend"             => "gemini-3.8-flash-medium",
+  "frontend-vue"              => "gemini-3.8-flash-medium",
+  "qa-tester"                 => "gemini-3.8-flash-medium",
+  "security-guardian"         => "gemini-3.8-flash-medium",
+  "designer"                  => "gemini-3.8-flash-medium",
+  "docs-writer"               => "gemini-3.8-flash-medium",
+  "janitor"                   => "gemini-3.8-flash-medium",
 }.freeze
 
 # An Artifact is one thing the installer places in a tool's config dir.
@@ -384,7 +384,7 @@ end
 def agy_frontmatter(canonical_fm, name)
   fm = { "name" => name }
   fm["description"] = canonical_fm["description"] if canonical_fm["description"]
-  fm["model"] = canonical_fm["gemini_model"] || canonical_fm["model"] || GEMINI_AGENT_MODELS[name] || "gemini-2.5-flash"
+  fm["model"] = canonical_fm["gemini_model"] || canonical_fm["model"] || GEMINI_AGENT_MODELS[name] || "gemini-3.8-flash-medium"
   fm["subagent"] = true unless canonical_fm["mode"] == "primary"
   fm
 end
