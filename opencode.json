@@ -11,7 +11,7 @@
       "disable": true
     },
     "plan": {
-      "model": "ollama/kimi-k3:cloud"
+      "model": "ollama/kimi-k3.1-pro:cloud"
     },
     "cartographer": {
       "model": "ollama/glm-5.3-flash:cloud"
@@ -26,7 +26,7 @@
       "model": "ollama/deepseek-v4.1-flash:1017-cloud"
     },
     "infra-platform": {
-      "model": "ollama/kimi-k3:cloud"
+      "model": "ollama/kimi-k3.1-pro:cloud"
     },
     "janitor": {
       "model": "ollama/deepseek-v4.1-flash:1017-cloud"
@@ -35,7 +35,7 @@
       "model": "ollama/glm-5.3-flash:cloud"
     },
     "principal": {
-      "model": "ollama/kimi-k3:cloud"
+      "model": "ollama/kimi-k3.1-pro:cloud"
     },
     "qa-tester": {
       "model": "ollama/glm-5.3-flash:cloud"
@@ -62,7 +62,7 @@
       "model": "ollama/glm-5.3-flash:cloud"
     },
     "image-analyst": {
-      "model": "ollama/kimi-k3:cloud"
+      "model": "ollama/kimi-k3.1-pro:cloud"
     }
   },
   "mcp": {
@@ -84,8 +84,8 @@
         "baseURL": "http://localhost:11434/v1"
       },
       "models": {
-        "kimi-k3:cloud": {
-          "name": "kimi-k3"
+        "kimi-k3.1-pro:cloud": {
+          "name": "kimi-k3.1-pro"
         },
         "glm-5.2:cloud": {
           "name": "glm-5.2"

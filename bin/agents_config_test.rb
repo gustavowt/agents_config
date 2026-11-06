@@ -963,7 +963,7 @@ class AgentsConfigTest < Minitest::Test
     assert_equal "ollama-cloud/deepseek-v4.1-flash:1017", opencode_model_id("ollama/deepseek-v4.1-flash:1017-cloud", nil, hosts: hosts, hostname: "vectra-server")
     assert_equal "ollama-cloud/glm-5.3-flash", opencode_model_id("ollama/glm-5.3-flash:cloud", nil, hosts: hosts, hostname: "vectra-server")
     assert_equal "ollama-cloud/glm-5.3", opencode_model_id("ollama/glm-5.3:cloud", nil, hosts: hosts, hostname: "vectra-server")
-    assert_equal "ollama-cloud/kimi-k3", opencode_model_id("ollama/kimi-k3:cloud", nil, hosts: hosts, hostname: "vectra-server")
+    assert_equal "ollama-cloud/kimi-k3.1-pro", opencode_model_id("ollama/kimi-k3.1-pro:cloud", nil, hosts: hosts, hostname: "vectra-server")
     assert_equal "ollama-cloud/mistral-large-4", opencode_model_id("ollama/mistral-large-4:cloud", nil, hosts: hosts, hostname: "vectra-server")
     # Ids without a trailing cloud marker keep their id under the swapped provider.
     assert_equal "ollama-cloud/qwen3:32b", opencode_model_id("ollama/qwen3:32b", nil, hosts: hosts, hostname: "vectra-server")
