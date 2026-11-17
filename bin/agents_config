@@ -52,13 +52,13 @@ PI_MODELS_MARKER = ".models_config_generated"
 OPENCODE_CONFIG_MARKER = ".opencode_routing_generated"
 
 GEMINI_AGENT_MODELS = {
-  "orchestrator"              => "gemini-4-argon-high",
-  "principal"                 => "gemini-4-argon-high",
-  "infra-platform"            => "gemini-4-argon-high",
-  "rails-backend-watchmaker"  => "gemini-4-argon-high",
-  "frontend-vue-watchmaker"   => "gemini-4-argon-high",
-  "image-analyst"             => "gemini-4-argon-high",
-  "redteam"                   => "gemini-4-argon-high",
+  "orchestrator"              => "gemini-4-hydrogen-high",
+  "principal"                 => "gemini-4-hydrogen-high",
+  "infra-platform"            => "gemini-4-hydrogen-high",
+  "rails-backend-watchmaker"  => "gemini-4-hydrogen-high",
+  "frontend-vue-watchmaker"   => "gemini-4-hydrogen-high",
+  "image-analyst"             => "gemini-4-hydrogen-high",
+  "redteam"                   => "gemini-4-hydrogen-high",
 
   "cartographer"              => "gemini-3.8-flash-medium",
   "sprinter"                  => "gemini-3.8-flash-medium",

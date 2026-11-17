@@ -97,7 +97,7 @@ class AgentsConfigTest < Minitest::Test
     refute File.symlink?(orch_file)
     orch_fm = parse_frontmatter(orch_file)
     assert_equal "orchestrator", orch_fm["name"]
-    assert_equal "gemini-4-argon-high", orch_fm["model"]
+    assert_equal "gemini-4-hydrogen-high", orch_fm["model"]
     refute orch_fm.key?("subagent"), "orchestrator (primary mode) should not have subagent: true"
 
     # Verify principal (Pro model, subagent mode -> subagent: true)
@@ -105,7 +105,7 @@ class AgentsConfigTest < Minitest::Test
     assert File.file?(princ_file)
     princ_fm = parse_frontmatter(princ_file)
     assert_equal "principal", princ_fm["name"]
-    assert_equal "gemini-4-argon-high", princ_fm["model"]
+    assert_equal "gemini-4-hydrogen-high", princ_fm["model"]
     assert_equal true, princ_fm["subagent"]
 
     # Verify sprinter (Flash model, subagent mode -> subagent: true)
@@ -144,7 +144,7 @@ class AgentsConfigTest < Minitest::Test
       assert File.file?(file), "Expected #{file} to exist"
       fm = parse_frontmatter(file)
       assert_equal name, fm["name"]
-      assert_equal "gemini-4-argon-high", fm["model"], "Expected #{name} to use gemini-4-argon-high"
+      assert_equal "gemini-4-hydrogen-high", fm["model"], "Expected #{name} to use gemini-4-hydrogen-high"
       if name == "orchestrator"
         refute fm.key?("subagent"), "orchestrator should not have subagent: true"
       else
